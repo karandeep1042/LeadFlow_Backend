@@ -17,10 +17,29 @@ const BrokerageSchema = new mongoose.Schema(
       default: 'Berlin',
       trim: true,
     },
+    phone: {
+      type: String,
+      trim: true,
+      default: '',
+    },
     status: {
       type: String,
       enum: ['active', 'suspended'],
       default: 'active',
+      index: true,
+    },
+    banReason: {
+      type: String,
+      default: '',
+    },
+    suspendedAt: {
+      type: Date,
+      default: null,
+    },
+    primaryAdminId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
     },
     metrics: {
       totalLeadsIngested: { type: Number, default: 0 },

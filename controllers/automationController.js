@@ -1,11 +1,52 @@
 import EmailTemplate from '../models/EmailTemplate.js';
 import StageTrigger from '../models/StageTrigger.js';
-import { DEFAULT_STAGE_CONFIGS } from '../utils/defaultAutomations.js';
+import { DEFAULT_STAGE_CONFIGS, DEFAULT_ACCOUNT_TEMPLATES } from '../utils/defaultAutomations.js';
+import cacheService from '../services/cacheService.js';
+
+const invalidateAutomationCaches = async (brokerageId) => {
+  if (!brokerageId) return;
+  try {
+    await Promise.all([
+      cacheService.invalidatePattern(cacheService.generateKey(brokerageId, 'automations', '*')),
+      cacheService.del(cacheService.generateKey(brokerageId, 'dash', 'stats')),
+    ]);
+  } catch (err) {
+    console.warn('[Cache] Error invalidating automation caches:', err.message);
+  }
+};
 
 export const getTemplates = async (req, res) => {
   try {
+    const brokerageId = req.user?.brokerageId;
+    const cacheKey = cacheService.generateKey(brokerageId, 'automations', 'templates');
+
+    const cached = await cacheService.get(cacheKey);
+    if (cached) {
+      res.setHeader('X-Cache', 'HIT');
+      return res.status(200).json(cached);
+    }
+
+    if (brokerageId) {
+      // Ensure account action templates exist
+      for (const tpl of DEFAULT_ACCOUNT_TEMPLATES) {
+        const exists = await EmailTemplate.findOne({ brokerageId, name: tpl.name });
+        if (!exists) {
+          await EmailTemplate.create({
+            brokerageId,
+            name: tpl.name,
+            subject: tpl.subject,
+            body: tpl.body,
+            description: tpl.description,
+          });
+        }
+      }
+    }
+
     const templates = await EmailTemplate.find({ ...req.tenantFilter });
-    return res.status(200).json({ success: true, data: { templates } });
+    const responsePayload = { success: true, data: { templates } };
+    cacheService.set(cacheKey, responsePayload, 3600).catch(() => {});
+    res.setHeader('X-Cache', 'MISS');
+    return res.status(200).json(responsePayload);
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -26,6 +67,8 @@ export const saveTemplate = async (req, res) => {
       description: description || '',
     });
 
+    await invalidateAutomationCaches(req.user.brokerageId);
+
     return res.status(201).json({ success: true, data: template });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
@@ -42,6 +85,9 @@ export const updateTemplate = async (req, res) => {
       { new: true }
     );
     if (!template) return res.status(404).json({ success: false, message: 'Template not found' });
+
+    await invalidateAutomationCaches(req.user.brokerageId);
+
     return res.status(200).json({ success: true, data: template });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
@@ -50,13 +96,22 @@ export const updateTemplate = async (req, res) => {
 
 export const getTriggers = async (req, res) => {
   try {
+    const brokerageId = req.user?.brokerageId;
+    const cacheKey = cacheService.generateKey(brokerageId, 'automations', 'triggers');
+
+    const cached = await cacheService.get(cacheKey);
+    if (cached) {
+      res.setHeader('X-Cache', 'HIT');
+      return res.status(200).json(cached);
+    }
+
     let triggers = await StageTrigger.find({ ...req.tenantFilter }).populate('emailTemplateId');
 
     // Auto-seed default triggers & templates if empty for this brokerage
-    if (triggers.length === 0 && req.user?.brokerageId) {
+    if (triggers.length === 0 && brokerageId) {
       for (const config of DEFAULT_STAGE_CONFIGS) {
         const template = await EmailTemplate.create({
-          brokerageId: req.user.brokerageId,
+          brokerageId,
           name: config.templateName,
           subject: config.subject,
           body: config.body,
@@ -64,7 +119,7 @@ export const getTriggers = async (req, res) => {
         });
 
         await StageTrigger.create({
-          brokerageId: req.user.brokerageId,
+          brokerageId,
           stage: config.stage,
           emailTemplateId: template._id,
           taskTitle: config.taskTitle,
@@ -77,7 +132,10 @@ export const getTriggers = async (req, res) => {
       triggers = await StageTrigger.find({ ...req.tenantFilter }).populate('emailTemplateId');
     }
 
-    return res.status(200).json({ success: true, data: { triggers } });
+    const responsePayload = { success: true, data: { triggers } };
+    cacheService.set(cacheKey, responsePayload, 3600).catch(() => {});
+    res.setHeader('X-Cache', 'MISS');
+    return res.status(200).json(responsePayload);
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -117,6 +175,8 @@ export const updateTrigger = async (req, res) => {
       { upsert: true, new: true }
     ).populate('emailTemplateId');
 
+    await invalidateAutomationCaches(req.user.brokerageId);
+
     return res.status(200).json({ success: true, data: trigger });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
@@ -134,6 +194,9 @@ export const toggleTriggerStatus = async (req, res) => {
     ).populate('emailTemplateId');
 
     if (!trigger) return res.status(404).json({ success: false, message: 'Stage trigger not found' });
+
+    await invalidateAutomationCaches(req.user.brokerageId);
+
     return res.status(200).json({ success: true, data: trigger });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });

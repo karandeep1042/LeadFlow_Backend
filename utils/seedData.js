@@ -3,10 +3,13 @@ import User from '../models/User.js';
 import Brokerage from '../models/Brokerage.js';
 import IngestionSource from '../models/IngestionSource.js';
 import EmailTemplate from '../models/EmailTemplate.js';
+import PlatformEmailTemplate from '../models/PlatformEmailTemplate.js';
 import StageTrigger from '../models/StageTrigger.js';
 import Lead from '../models/Lead.js';
 import Task from '../models/Task.js';
-import { DEFAULT_STAGE_CONFIGS } from './defaultAutomations.js';
+import Document from '../models/Document.js';
+import { DEFAULT_STAGE_CONFIGS, DEFAULT_ACCOUNT_TEMPLATES } from './defaultAutomations.js';
+import { DEFAULT_PLATFORM_TEMPLATES } from './defaultPlatformTemplates.js';
 import { DEMO_LEADS_CONFIG } from './defaultLeads.js';
 
 export const seedDefaultDemoAccounts = async () => {
@@ -53,6 +56,35 @@ export const seedDefaultDemoAccounts = async () => {
         password: 'Password@123',
         role: 'advisor',
         brokerageId: demoBrokerage._id,
+        phone: '+49 170 8899112',
+        status: 'active',
+      },
+      {
+        name: 'Maximilian Weber',
+        email: 'm.weber@hypo.de',
+        password: 'Password@123',
+        role: 'advisor',
+        brokerageId: demoBrokerage._id,
+        phone: '+49 171 3344556',
+        status: 'active',
+      },
+      {
+        name: 'Chloe Dubois',
+        email: 'c.dubois@hypo.de',
+        password: 'Password@123',
+        role: 'advisor',
+        brokerageId: demoBrokerage._id,
+        phone: '+49 172 5566778',
+        status: 'active',
+      },
+      {
+        name: 'Jan Novák',
+        email: 'j.novak@hypo.de',
+        password: 'Password@123',
+        role: 'advisor',
+        brokerageId: demoBrokerage._id,
+        phone: '+49 173 7788990',
+        status: 'invited',
       },
       {
         name: 'Alex Müller',
@@ -147,6 +179,31 @@ export const seedDefaultDemoAccounts = async () => {
         console.log(`[Seed]: Created demo StageTrigger: ${config.stage}`);
       }
     }
+    // 4b. Seed Default Account Status Email Templates
+    for (const tpl of DEFAULT_ACCOUNT_TEMPLATES) {
+      const exists = await EmailTemplate.findOne({ brokerageId: demoBrokerage._id, name: tpl.name });
+      if (!exists) {
+        await EmailTemplate.create({
+          brokerageId: demoBrokerage._id,
+          name: tpl.name,
+          subject: tpl.subject,
+          body: tpl.body,
+          description: tpl.description,
+        });
+        console.log(`[Seed]: Created demo EmailTemplate: ${tpl.name}`);
+      }
+    }
+
+    // 4c. Seed Platform Email Templates
+    for (const tpl of DEFAULT_PLATFORM_TEMPLATES) {
+      const exists = await PlatformEmailTemplate.findOne({ key: tpl.key });
+      if (!exists) {
+        await PlatformEmailTemplate.create(tpl);
+        console.log(`[Seed]: Created Platform Email Template: ${tpl.name}`);
+      }
+    }
+
+
 
     // 5. Seed Pipeline Demo Expat Leads across stages
     for (const leadData of DEMO_LEADS_CONFIG) {
@@ -219,6 +276,18 @@ export const seedDefaultDemoAccounts = async () => {
           dueAt: new Date(Date.now() - 24 * 60 * 60 * 1000),
           isCompleted: true,
           completedAt: new Date(Date.now() - 12 * 60 * 60 * 1000),
+          completedReason: 'Completed on stage advance to Bank Submission',
+        },
+        {
+          title: 'KYC Identity Verification & Proof of Residence (Historical)',
+          description: 'Verified German Meldebescheinigung and EU Passport scan for mortgage pre-approval.',
+          leadId: demoLeads[0]?._id || null,
+          assignedAdvisorId: demoAdvisor?._id || null,
+          priority: 'low',
+          dueAt: new Date(Date.now() - 20 * 24 * 60 * 60 * 1000),
+          isCompleted: true,
+          completedAt: new Date(Date.now() - 18 * 24 * 60 * 60 * 1000),
+          completedReason: 'Completed by advisor after video KYC verification',
         },
       ];
 
@@ -229,6 +298,103 @@ export const seedDefaultDemoAccounts = async () => {
         });
       }
       console.log(`[Seed]: Seeded ${sampleTasks.length} demo Tasks.`);
+    }
+    // 7. Seed Sample Documents for Document Verification & Compliance
+    const existingDocsCount = await Document.countDocuments({ brokerageId: demoBrokerage._id });
+    if (existingDocsCount === 0) {
+      const demoClient = await User.findOne({ email: 'client@gmail.com' });
+      const demoLead = await Lead.findOne({ brokerageId: demoBrokerage._id, stage: 'Document Collection' });
+      if (demoClient) {
+        const sampleDocs = [
+          {
+            brokerageId: demoBrokerage._id,
+            clientId: demoClient._id,
+            leadId: demoLead?._id || null,
+            docType: 'passport',
+            category: 'personal',
+            title: 'Passport & Residence Permit (Aufenthaltstitel)',
+            fileName: 'passport_residence_permit.pdf',
+            fileUrl: '/uploads/sample_passport.pdf',
+            fileSize: 2450000,
+            status: 'verified',
+            advisorApproved: true,
+            verifiedAt: new Date(Date.now() - 2 * 86400000),
+          },
+          {
+            brokerageId: demoBrokerage._id,
+            clientId: demoClient._id,
+            leadId: demoLead?._id || null,
+            docType: 'payslip_1',
+            category: 'income',
+            title: 'Last 3 Months Gehaltsabrechnung (Payslips)',
+            fileName: 'gehaltsabrechnungen_q1.pdf',
+            fileUrl: '/uploads/sample_payslips.pdf',
+            fileSize: 3120000,
+            status: 'verified',
+            advisorApproved: true,
+            verifiedAt: new Date(Date.now() - 1 * 86400000),
+          },
+          {
+            brokerageId: demoBrokerage._id,
+            clientId: demoClient._id,
+            leadId: demoLead?._id || null,
+            docType: 'schufa',
+            category: 'financial',
+            title: 'SCHUFA Bonitätsauskunft (Credit Certificate 99.1%)',
+            fileName: 'schufa_auskunft_bonitaet.pdf',
+            fileUrl: '/uploads/sample_schufa.pdf',
+            fileSize: 1850000,
+            status: 'verified',
+            advisorApproved: true,
+            verifiedAt: new Date(Date.now() - 3 * 86400000),
+          },
+          {
+            brokerageId: demoBrokerage._id,
+            clientId: demoClient._id,
+            leadId: demoLead?._id || null,
+            docType: 'employment_contract',
+            category: 'income',
+            title: 'Permanent Employment Contract (Unbefristeter Arbeitsvertrag)',
+            fileName: 'arbeitsvertrag_permanent.pdf',
+            fileUrl: '/uploads/sample_contract.pdf',
+            fileSize: 4200000,
+            status: 'verified',
+            advisorApproved: true,
+            verifiedAt: new Date(Date.now() - 4 * 86400000),
+          },
+          {
+            brokerageId: demoBrokerage._id,
+            clientId: demoClient._id,
+            leadId: demoLead?._id || null,
+            docType: 'bank_statement',
+            category: 'financial',
+            title: 'Bank Statement & Proof of Down Payment Equity (€120,000)',
+            fileName: 'equity_bank_statement.pdf',
+            fileUrl: '/uploads/sample_bank_statement.pdf',
+            fileSize: 1200000,
+            status: 'processing',
+            advisorApproved: false,
+          },
+          {
+            brokerageId: demoBrokerage._id,
+            clientId: demoClient._id,
+            leadId: demoLead?._id || null,
+            docType: 'property_expose',
+            category: 'property',
+            title: 'Property Expose & Grundbuchauszug (Land Register Extract)',
+            fileName: 'property_expose_berlin_mitte.pdf',
+            fileUrl: '/uploads/sample_expose.pdf',
+            fileSize: 8400000,
+            status: 'processing',
+            advisorApproved: false,
+          },
+        ];
+
+        for (const doc of sampleDocs) {
+          await Document.create(doc);
+        }
+        console.log(`[Seed]: Seeded ${sampleDocs.length} demo Documents.`);
+      }
     }
   } catch (error) {
     console.error('[Seed Error]: Could not seed default demo accounts:', error.message);

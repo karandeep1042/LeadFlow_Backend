@@ -7,19 +7,30 @@ import {
   updateProfile,
   logout,
   forgotPassword,
+  verifyResetCode,
   resetPassword,
+  sendSignupVerificationCode,
+  verifySignupCode,
 } from '../controllers/authController.js';
 import { authenticate, authorize } from '../middlewares/authMiddleware.js';
+import {
+  authLimiter,
+  passwordResetLimiter,
+  verifyResetCodeLimiter,
+} from '../middlewares/rateLimiter.js';
 import { ALL_ROLES } from '../utils/constants.js';
 
 const router = express.Router();
 
-// Public Routes (No auth required)
-router.post('/register-brokerage', registerBrokerage);
-router.post('/login', login);
+// Public Routes (Protected by specialized rate limiters)
+router.post('/register-brokerage', authLimiter, registerBrokerage);
+router.post('/send-signup-verification-code', passwordResetLimiter, sendSignupVerificationCode);
+router.post('/verify-signup-code', verifyResetCodeLimiter, verifySignupCode);
+router.post('/login', authLimiter, login);
 router.post('/refresh-token', refreshToken);
-router.post('/forgot-password', forgotPassword);
-router.post('/reset-password', resetPassword);
+router.post('/forgot-password', passwordResetLimiter, forgotPassword);
+router.post('/verify-reset-code', verifyResetCodeLimiter, verifyResetCode);
+router.post('/reset-password', passwordResetLimiter, resetPassword);
 
 // Protected Routes (Require Authentication + Role Authorization)
 router.get('/me', authenticate, authorize(ALL_ROLES), getCurrentUser);

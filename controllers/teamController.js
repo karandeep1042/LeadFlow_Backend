@@ -2,11 +2,21 @@ import User from '../models/User.js';
 import Lead from '../models/Lead.js';
 import Brokerage from '../models/Brokerage.js';
 import { sendAdvisorInvitationEmail } from '../utils/emailService.js';
+import cacheService from '../services/cacheService.js';
 
 export const getAdvisors = async (req, res) => {
   try {
+    const brokerageId = req.user.brokerageId;
+    const cacheKey = cacheService.generateKey(brokerageId, 'team', 'advisors');
+
+    const cached = await cacheService.get(cacheKey);
+    if (cached) {
+      res.setHeader('X-Cache', 'HIT');
+      return res.status(200).json(cached);
+    }
+
     const advisors = await User.find({
-      brokerageId: req.user.brokerageId,
+      brokerageId,
       role: 'advisor',
     })
       .select('-password -refreshToken')
@@ -17,7 +27,7 @@ export const getAdvisors = async (req, res) => {
     const enriched = await Promise.all(
       advisors.map(async (adv) => {
         const activeLeads = await Lead.find({
-          brokerageId: req.user.brokerageId,
+          brokerageId,
           assignedAdvisorId: adv._id,
           stage: { $nin: ['Won', 'Lost'] },
         }).select('loanAmount');
@@ -35,7 +45,10 @@ export const getAdvisors = async (req, res) => {
       })
     );
 
-    return res.status(200).json({ success: true, data: { advisors: enriched } });
+    const responsePayload = { success: true, data: { advisors: enriched } };
+    cacheService.set(cacheKey, responsePayload, 900).catch(() => {});
+    res.setHeader('X-Cache', 'MISS');
+    return res.status(200).json(responsePayload);
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -97,6 +110,12 @@ export const inviteAdvisor = async (req, res) => {
       status: 'active',
     });
 
+    // Invalidate Team and Dashboard caches
+    await Promise.all([
+      cacheService.del(cacheService.generateKey(req.user.brokerageId, 'team', 'advisors')),
+      cacheService.del(cacheService.generateKey(req.user.brokerageId, 'dash', 'stats')),
+    ]).catch(() => {});
+
     // 5. Send Email Invitation
     const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
     const emailResult = await sendAdvisorInvitationEmail({
@@ -148,6 +167,12 @@ export const updateAdvisorStatus = async (req, res) => {
     if (!advisor) {
       return res.status(404).json({ success: false, message: 'Advisor not found in your brokerage' });
     }
+
+    // Invalidate Team and Dashboard caches
+    await Promise.all([
+      cacheService.del(cacheService.generateKey(req.user.brokerageId, 'team', 'advisors')),
+      cacheService.del(cacheService.generateKey(req.user.brokerageId, 'dash', 'stats')),
+    ]).catch(() => {});
 
     return res.status(200).json({
       success: true,
