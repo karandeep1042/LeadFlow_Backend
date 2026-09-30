@@ -137,20 +137,27 @@ export const getTaskAnalytics = async (req, res) => {
       ];
     }
 
-    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+    const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
     const [
       totalTasks,
       pendingTasks,
       overdueTasks,
+      dueTodayTasks,
+      upcomingTasks,
       allCompletedTasks,
       recentCompleted7d,
       completed30d,
     ] = await Promise.all([
       Task.countDocuments(filter),
       Task.countDocuments({ ...filter, isCompleted: false }),
-      Task.countDocuments({ ...filter, isCompleted: false, dueAt: { $lt: new Date() } }),
+      Task.countDocuments({ ...filter, isCompleted: false, dueAt: { $lt: now } }),
+      Task.countDocuments({ ...filter, isCompleted: false, dueAt: { $gte: startOfDay, $lte: endOfDay } }),
+      Task.countDocuments({ ...filter, isCompleted: false, dueAt: { $gt: endOfDay } }),
       Task.find({ ...filter, isCompleted: true, status: { $ne: 'superseded' } }).select('createdAt dueAt completedAt priority stage assignedAdvisorId'),
       Task.countDocuments({ ...filter, isCompleted: true, completedAt: { $gte: sevenDaysAgo } }),
       Task.countDocuments({ ...filter, isCompleted: true, completedAt: { $gte: thirtyDaysAgo } }),
@@ -180,6 +187,8 @@ export const getTaskAnalytics = async (req, res) => {
         totalTasks,
         pendingTasks,
         overdueTasks,
+        dueTodayTasks,
+        upcomingTasks,
         totalCompleted,
         recentCompleted7d,
         completed30d,

@@ -50,10 +50,34 @@ export const authenticate = async (req, res, next) => {
       });
     }
 
-    // 4. Attach user context to request
+    // 4. Attach active session role and brokerage scope from verified token
+    const activeRole = decoded.role || user.role;
+    const activeBrokerageId = decoded.brokerageId !== undefined ? decoded.brokerageId : user.brokerageId;
+
+    // Verify that the user's membership in this workspace has not been individually suspended
+    if (user.memberships && user.memberships.length > 0) {
+      const activeMembership = user.memberships.find((m) => {
+        if (activeRole === 'platform_admin') return m.role === 'platform_admin';
+        return (
+          m.role === activeRole &&
+          m.brokerageId &&
+          m.brokerageId.toString() === (activeBrokerageId?._id || activeBrokerageId)?.toString()
+        );
+      });
+      if (activeMembership && activeMembership.status === 'suspended') {
+        return res.status(403).json({
+          success: false,
+          message: 'Your access to this organization has been suspended.',
+        });
+      }
+    }
+
+    user.role = activeRole;
+    user.brokerageId = activeBrokerageId;
+
     req.user = user;
-    req.userRole = user.role;
-    req.brokerageId = user.brokerageId;
+    req.userRole = activeRole;
+    req.brokerageId = activeBrokerageId;
 
     next();
   } catch (error) {

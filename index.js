@@ -1,13 +1,16 @@
-import dotenv from 'dotenv';
-dotenv.config();
-
+import './utils/dotenvLoader.js';
 import http from 'http';
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { connectDB } from './utils/db.js';
 import { seedDefaultDemoAccounts } from './utils/seedData.js';
 import { initSocket } from './utils/socket.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 import authRoutes from './routes/authRoutes.js';
 import tenantRoutes from './routes/tenantRoutes.js';
@@ -40,6 +43,10 @@ app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
+
+// Serve static uploaded documents for local storage fallback
+const uploadsDir = path.resolve(__dirname, 'uploads');
+app.use('/uploads', express.static(uploadsDir));
 
 // Initialize Socket.IO Server attached to HTTP server
 initSocket(server, corsOptions);

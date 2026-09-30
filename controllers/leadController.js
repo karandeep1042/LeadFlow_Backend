@@ -7,7 +7,7 @@ import StageTrigger from '../models/StageTrigger.js';
 import { sendLeadAdvisorAssignedEmail, sendClientInvitationEmail } from '../utils/emailService.js';
 import { emitToBrokerage, emitToRole, emitToUser } from '../utils/socket.js';
 import { notifyLeadIngestion, notifyStageUpdated, notifyTaskAssigned } from '../services/notificationService.js';
-import { REQUIRED_COMPLIANCE_DOC_TYPES, ALLOWED_STAGE_TRANSITIONS } from '../utils/constants.js';
+import { REQUIRED_COMPLIANCE_DOC_TYPES, ALLOWED_STAGE_TRANSITIONS, getStageDisplayName } from '../utils/constants.js';
 import { DEFAULT_STAGE_CONFIGS } from '../utils/defaultAutomations.js';
 import cacheService from '../services/cacheService.js';
 
@@ -280,8 +280,8 @@ export const syncStageTasks = async ({
           isCompleted: true,
           completedAt: new Date(),
           completedReason: isReverseMove
-            ? `Superseded by stage regression to ${targetStage}`
-            : `Superseded by stage transition to ${targetStage}`,
+            ? `Superseded by stage regression to ${getStageDisplayName(targetStage)}`
+            : `Superseded by stage transition to ${getStageDisplayName(targetStage)}`,
         },
       }
     );
@@ -294,7 +294,7 @@ export const syncStageTasks = async ({
     });
 
     const defaultConfig = DEFAULT_STAGE_CONFIGS.find((c) => c.stage === targetStage);
-    const rawTaskTitle = trigger?.taskTitle || defaultConfig?.taskTitle || `Complete ${targetStage} workflow for {{client_name}}`;
+    const rawTaskTitle = trigger?.taskTitle || defaultConfig?.taskTitle || `Complete ${getStageDisplayName(targetStage)} workflow for {{client_name}}`;
     const dueHours = trigger?.taskDueHours || defaultConfig?.taskDueHours || 24;
     const priority = trigger?.taskPriority || defaultConfig?.taskPriority || 'medium';
 
@@ -693,13 +693,13 @@ export const updateLeadStage = async (req, res) => {
     if (newlyClaimed) {
       lead.notesList.push({
         author: req.user.name || 'Mortgage Advisor',
-        text: `Lead claimed by ${req.user.name || 'Mortgage Advisor'} and advanced from ${previousStage} to ${stage}.`,
+        text: `Lead claimed by ${req.user.name || 'Mortgage Advisor'} and advanced from ${getStageDisplayName(previousStage)} to ${getStageDisplayName(stage)}.`,
         createdAt: new Date(),
       });
     } else {
       lead.notesList.push({
         author: req.user.name || 'Mortgage Advisor',
-        text: `Pipeline stage updated from ${previousStage} to ${stage}.`,
+        text: `Pipeline stage updated from ${getStageDisplayName(previousStage)} to ${getStageDisplayName(stage)}.`,
         createdAt: new Date(),
       });
     }
@@ -726,7 +726,7 @@ export const updateLeadStage = async (req, res) => {
 
       lead.notesList.push({
         author: req.user.name || 'System Automation',
-        text: `Client portal automatically deactivated and document upload permissions suspended upon moving case back to Initial Consultation (${stage}).`,
+        text: `Client portal automatically deactivated and document upload permissions suspended upon moving case back to ${getStageDisplayName(stage)}.`,
         createdAt: new Date(),
       });
     }
@@ -755,7 +755,7 @@ export const updateLeadStage = async (req, res) => {
         });
         lead.notesList.push({
           author: req.user.name || 'System Automation',
-          text: `Client portal re-activated upon advancing case to "${stage}". Document upload access restored.`,
+          text: `Client portal re-activated upon advancing case to "${getStageDisplayName(stage)}". Document upload access restored.`,
           createdAt: new Date(),
         });
       }
@@ -764,7 +764,7 @@ export const updateLeadStage = async (req, res) => {
       if (!lead.isConverted && lead.email) {
         try {
           const normalizedEmail = lead.email.toLowerCase().trim();
-          let clientUser = await User.findOne({ email: normalizedEmail, brokerageId: lead.brokerageId });
+          let clientUser = await User.findOne({ email: normalizedEmail });
           if (!clientUser) {
             clientUser = await User.create({
               name: `${lead.firstName} ${lead.lastName || ''}`.trim() || 'Client',
@@ -772,13 +772,36 @@ export const updateLeadStage = async (req, res) => {
               password: 'Password@123',
               role: 'client',
               brokerageId: lead.brokerageId,
+              memberships: [
+                {
+                  brokerageId: lead.brokerageId,
+                  role: 'client',
+                  status: 'active',
+                  joinedAt: new Date(),
+                },
+              ],
               phone: lead.phone || '',
               status: 'active',
+              mustChangePassword: true,
+              isTemporaryPassword: true,
             });
           } else {
+            if (!clientUser.memberships) clientUser.memberships = [];
+            const hasMem = clientUser.memberships.some(
+              (m) =>
+                m.brokerageId &&
+                m.brokerageId.toString() === lead.brokerageId.toString() &&
+                m.role === 'client'
+            );
+            if (!hasMem) {
+              clientUser.memberships.push({
+                brokerageId: lead.brokerageId,
+                role: 'client',
+                status: 'active',
+                joinedAt: new Date(),
+              });
+            }
             clientUser.status = 'active';
-            clientUser.password = 'Password@123';
-            if (!clientUser.brokerageId) clientUser.brokerageId = lead.brokerageId;
             await clientUser.save();
           }
 
@@ -788,7 +811,7 @@ export const updateLeadStage = async (req, res) => {
 
           lead.notesList.push({
             author: req.user.name || 'System Automation',
-            text: `Client portal automatically activated upon advancing to stage "${stage}". Login credentials invitation dispatched to borrower.`,
+            text: `Client portal automatically activated upon advancing to stage "${getStageDisplayName(stage)}". Login credentials invitation dispatched to borrower.`,
             createdAt: new Date(),
           });
         } catch (convErr) {
@@ -940,6 +963,7 @@ export const updateLeadStage = async (req, res) => {
       stage,
       previousStage,
       updatedByAdvisorName: req.user.name,
+      updatedByAdvisorId: req.user._id,
       isBankRevisionRegression,
       revisionReason: reason || 'Document update requested by bank underwriter.',
       rejectedDocs: rejectedDocsList,
@@ -1095,13 +1119,36 @@ export const convertToClient = async (req, res) => {
         password: 'Password@123',
         role: 'client',
         brokerageId: lead.brokerageId,
+        memberships: [
+          {
+            brokerageId: lead.brokerageId,
+            role: 'client',
+            status: 'active',
+            joinedAt: new Date(),
+          },
+        ],
         phone: lead.phone || '',
         status: 'active',
+        mustChangePassword: true,
+        isTemporaryPassword: true,
       });
     } else {
+      if (!clientUser.memberships) clientUser.memberships = [];
+      const hasMem = clientUser.memberships.some(
+        (m) =>
+          m.brokerageId &&
+          m.brokerageId.toString() === lead.brokerageId.toString() &&
+          m.role === 'client'
+      );
+      if (!hasMem) {
+        clientUser.memberships.push({
+          brokerageId: lead.brokerageId,
+          role: 'client',
+          status: 'active',
+          joinedAt: new Date(),
+        });
+      }
       clientUser.status = 'active';
-      clientUser.password = 'Password@123';
-      if (!clientUser.brokerageId) clientUser.brokerageId = lead.brokerageId;
       await clientUser.save();
     }
 

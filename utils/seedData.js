@@ -98,8 +98,28 @@ export const seedDefaultDemoAccounts = async () => {
     for (const acc of demoAccounts) {
       const exists = await User.findOne({ email: acc.email });
       if (!exists) {
-        await User.create(acc);
+        await User.create({
+          ...acc,
+          memberships: [
+            {
+              brokerageId: acc.brokerageId || null,
+              role: acc.role,
+              status: acc.status || 'active',
+              joinedAt: new Date(),
+            },
+          ],
+        });
         console.log(`[Seed]: Created demo user: ${acc.email} (${acc.role})`);
+      } else if (!exists.memberships || exists.memberships.length === 0) {
+        exists.memberships = [
+          {
+            brokerageId: exists.brokerageId || null,
+            role: exists.role,
+            status: exists.status || 'active',
+            joinedAt: new Date(),
+          },
+        ];
+        await exists.save();
       }
     }
 

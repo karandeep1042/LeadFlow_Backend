@@ -1,19 +1,26 @@
+import './dotenvLoader.js';
 import Redis from 'ioredis';
 
 let redisClient = null;
 let isConnected = false;
 let currentRedisUrl = process.env.REDIS_URL || '';
 
+/**
+ * Resolves configuration parameters for ioredis instance.
+ * Automatically enables TLS & SNI for Upstash and cloud-hosted clusters.
+ */
 export const resolveRedisConfig = (rawUrl) => {
-  if (!rawUrl || !rawUrl.trim()) return null;
+  const urlToParse = (rawUrl || currentRedisUrl || process.env.REDIS_URL || '').trim();
+  if (!urlToParse) return null;
 
-  let url = rawUrl.trim();
+  let url = urlToParse;
   const isUpstash = url.includes('upstash.io');
   const isCloud =
     url.includes('redislabs.com') ||
     url.includes('redis.cache.windows.net') ||
     url.includes('amazonaws.com') ||
-    url.includes('aivencloud.com');
+    url.includes('aivencloud.com') ||
+    isUpstash;
   const isExplicitTls = url.startsWith('rediss://');
 
   if ((isUpstash || isCloud) && url.startsWith('redis://')) {
@@ -22,27 +29,47 @@ export const resolveRedisConfig = (rawUrl) => {
 
   const needsTls = isExplicitTls || isUpstash || isCloud;
 
+  let host = '127.0.0.1';
+  let port = 6379;
+  try {
+    const parsed = new URL(url);
+    host = parsed.hostname || '127.0.0.1';
+    port = parsed.port ? parseInt(parsed.port, 10) : 6379;
+  } catch (_) {}
+
   return {
     url,
+    host,
+    port,
+    isUpstash,
+    isCloud,
     needsTls,
     options: {
       maxRetriesPerRequest: 3,
-      connectTimeout: 8000,
+      connectTimeout: 10000,
+      keepAlive: 10000,
       lazyConnect: false,
-      enableOfflineQueue: false,
-      tls: needsTls ? { rejectUnauthorized: false } : undefined,
+      enableOfflineQueue: true,
+      tls: needsTls ? { rejectUnauthorized: false, servername: host } : undefined,
       retryStrategy(times) {
-        if (times > 3) {
-          console.warn('[Redis] Max reconnection attempts reached. Continuing with in-memory fallback.');
-          return null;
+        // Continuous backoff up to 3 seconds to ensure automatic recovery after idle timeouts
+        return Math.min(times * 500, 3000);
+      },
+      reconnectOnError(err) {
+        const targetErrors = ['READONLY', 'ECONNRESET', 'ETIMEDOUT', 'Connection is closed'];
+        if (targetErrors.some((t) => (err?.message || '').includes(t))) {
+          return true; // Reconnect automatically
         }
-        return Math.min(times * 500, 2000);
+        return false;
       },
     },
   };
 };
 
-export const initRedisClient = (url = currentRedisUrl) => {
+/**
+ * Initializes or re-initializes the global Redis client.
+ */
+export const initRedisClient = (url = process.env.REDIS_URL || currentRedisUrl) => {
   if (redisClient) {
     try {
       redisClient.disconnect();
@@ -51,25 +78,25 @@ export const initRedisClient = (url = currentRedisUrl) => {
     isConnected = false;
   }
 
-  currentRedisUrl = url;
-  const config = resolveRedisConfig(url);
+  currentRedisUrl = (url || '').trim();
+  const config = resolveRedisConfig(currentRedisUrl);
 
   if (config) {
     try {
       redisClient = new Redis(config.url, config.options);
 
       redisClient.on('connect', () => {
-        console.log('[Redis] Connected to Redis instance');
+        console.log(`[Redis] Connected to Redis instance at ${config.host}:${config.port}`);
         isConnected = true;
       });
 
       redisClient.on('ready', () => {
-        console.log('[Redis] Redis client ready for operations');
+        console.log(`[Redis] Redis client ready for operations (${config.host})`);
         isConnected = true;
       });
 
       redisClient.on('error', (err) => {
-        console.warn('[Redis] Connection warning/error:', err.message);
+        console.warn(`[Redis] Connection warning (${config.host}):`, err.message);
         isConnected = false;
       });
 
@@ -88,12 +115,15 @@ export const initRedisClient = (url = currentRedisUrl) => {
   return redisClient;
 };
 
-// Initial connection
-initRedisClient(currentRedisUrl);
+// Initial connection attempt on boot
+initRedisClient(currentRedisUrl || process.env.REDIS_URL || '');
 
+/**
+ * Non-destructive connection test for a given Redis URL or the current active connection.
+ */
 export const testRedisConnection = async (testUrl) => {
-  const targetUrl = testUrl || currentRedisUrl;
-  if (!targetUrl || !targetUrl.trim()) {
+  const targetUrl = (testUrl || currentRedisUrl || process.env.REDIS_URL || '').trim();
+  if (!targetUrl) {
     return {
       success: true,
       message: 'Redis is not configured. Platform is running in in-memory fallback mode.',
@@ -105,13 +135,13 @@ export const testRedisConnection = async (testUrl) => {
   const config = resolveRedisConfig(targetUrl);
   const startTime = Date.now();
 
-  const attemptConnect = async (urlToTry, useTls) => {
+  const attemptConnect = async (urlToTry, useTls, host) => {
     const tempClient = new Redis(urlToTry, {
       maxRetriesPerRequest: 1,
       connectTimeout: 6000,
       lazyConnect: true,
       enableOfflineQueue: false,
-      tls: useTls ? { rejectUnauthorized: false } : undefined,
+      tls: useTls ? { rejectUnauthorized: false, servername: host } : undefined,
     });
 
     try {
@@ -126,11 +156,12 @@ export const testRedisConnection = async (testUrl) => {
 
       return {
         success: true,
-        message: `Redis connection verified successfully (${pingResponse}).`,
+        message: `Redis connection verified successfully (${pingResponse}). Host: ${host}`,
         latencyMs,
         normalizedUrl: urlToTry,
         details: {
           status: 'Connected & Ready',
+          host,
           pingResponse,
           keyCount,
           tls: useTls,
@@ -145,14 +176,13 @@ export const testRedisConnection = async (testUrl) => {
   };
 
   try {
-    // Primary attempt
-    return await attemptConnect(config.url, config.needsTls);
+    return await attemptConnect(config.url, config.needsTls, config.host);
   } catch (primaryErr) {
-    // If TLS was false, retry once with TLS in case cloud provider requires it
+    // If TLS was not set, retry once with TLS in case cloud provider requires it
     if (!config.needsTls) {
       try {
         const tlsUrl = config.url.replace(/^redis:\/\//, 'rediss://');
-        return await attemptConnect(tlsUrl, true);
+        return await attemptConnect(tlsUrl, true, config.host);
       } catch (_) {}
     }
 
@@ -164,10 +194,25 @@ export const testRedisConnection = async (testUrl) => {
   }
 };
 
-export const isRedisReady = () => Boolean(redisClient && isConnected);
-export const getRedisClient = () => (isRedisReady() ? redisClient : null);
-export const getCurrentRedisUrl = () => currentRedisUrl;
+export const isRedisReady = () => {
+  if (!redisClient) return false;
+  return isConnected && (redisClient.status === 'ready' || redisClient.status === 'connect');
+};
+export const getRedisClient = () => redisClient;
+export const getCurrentRedisUrl = () => currentRedisUrl || process.env.REDIS_URL || '';
+
+export const getRedisHost = () => {
+  const url = getCurrentRedisUrl();
+  if (!url) return 'In-Memory';
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname || 'Redis Instance';
+  } catch (_) {
+    return 'Redis Instance';
+  }
+};
 
 export default redisClient;
+
 
 

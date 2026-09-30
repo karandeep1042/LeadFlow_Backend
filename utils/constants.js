@@ -40,4 +40,18 @@ export const ALLOWED_STAGE_TRANSITIONS = {
   'Won': ['Lost'],
   'Lost': [],
 };
+export const STAGE_DISPLAY_NAMES = {
+  'New': 'Lead Ingestion',
+  'Contacted': 'Initial Consultation',
+  'Document Collection': 'Document Collection',
+  'Bank Submission': 'Bank Submission',
+  'Won': 'Loan Offer & Approval',
+  'Lost': 'Notary & Closing',
+};
+
+export const getStageDisplayName = (stageKey) => {
+  if (!stageKey) return 'Pipeline';
+  return STAGE_DISPLAY_NAMES[stageKey] || stageKey;
+};
+
 

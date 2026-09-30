@@ -5,6 +5,7 @@ import Task from '../models/Task.js';
 import { emitToBrokerage } from '../utils/socket.js';
 import { notifyLeadIngestion } from '../services/notificationService.js';
 import cacheService from '../services/cacheService.js';
+import { seedDefaultIngestionSources } from '../utils/defaultIngestionSources.js';
 
 const invalidateIntegrationCaches = async (brokerageId) => {
   if (!brokerageId) return;
@@ -21,7 +22,10 @@ const invalidateIntegrationCaches = async (brokerageId) => {
 
 export const getSources = async (req, res) => {
   try {
-    const sources = await IngestionSource.find({ ...req.tenantFilter }).sort({ createdAt: -1 });
+    let sources = await IngestionSource.find({ ...req.tenantFilter }).sort({ createdAt: -1 });
+    if (sources.length === 0 && req.user?.brokerageId) {
+      sources = await seedDefaultIngestionSources(req.user.brokerageId);
+    }
     return res.status(200).json({ success: true, data: { sources } });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
@@ -203,6 +207,15 @@ export const handleInboundWebhook = async (req, res) => {
     const source = await IngestionSource.findById(sourceId);
     if (!source) return res.status(404).json({ success: false, message: 'Webhook endpoint not found' });
     if (source.status === 'inactive') return res.status(403).json({ success: false, message: 'Webhook ingestion source is inactive' });
+
+    // Optional flexible Secret API Key verification
+    const providedApiKey = req.headers['x-api-key'] || req.headers['x-leadflow-key'] || req.query.apiKey;
+    if (providedApiKey && source.apiKeyHash) {
+      const computedHash = crypto.createHash('sha256').update(providedApiKey).digest('hex');
+      if (computedHash !== source.apiKeyHash) {
+        return res.status(401).json({ success: false, message: 'Invalid API Key provided in header' });
+      }
+    }
 
     const mapping = source.fieldMapping || {};
     const parsedLead = {

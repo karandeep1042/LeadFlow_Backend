@@ -2,9 +2,11 @@ import express from 'express';
 import {
   registerBrokerage,
   login,
+  switchWorkspace,
   refreshToken,
   getCurrentUser,
   updateProfile,
+  setInitialPassword,
   logout,
   forgotPassword,
   verifyResetCode,
@@ -34,7 +36,9 @@ router.post('/reset-password', passwordResetLimiter, resetPassword);
 
 // Protected Routes (Require Authentication + Role Authorization)
 router.get('/me', authenticate, authorize(ALL_ROLES), getCurrentUser);
+router.post('/switch-workspace', authenticate, authorize(ALL_ROLES), switchWorkspace);
 router.patch('/profile', authenticate, authorize(ALL_ROLES), updateProfile);
+router.post('/set-initial-password', authenticate, authorize(ALL_ROLES), setInitialPassword);
 router.post('/logout', authenticate, authorize(ALL_ROLES), logout);
 
 export default router;

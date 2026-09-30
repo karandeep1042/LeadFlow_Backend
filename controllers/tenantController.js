@@ -7,6 +7,7 @@ import Document from '../models/Document.js';
 import EmailTemplate from '../models/EmailTemplate.js';
 import StageTrigger from '../models/StageTrigger.js';
 import { DEFAULT_STAGE_CONFIGS, DEFAULT_ACCOUNT_TEMPLATES } from '../utils/defaultAutomations.js';
+import { seedDefaultIngestionSources } from '../utils/defaultIngestionSources.js';
 import {
   sendBrokerageWelcomeEmail,
   sendBrokerageSuspendedEmail,
@@ -152,8 +153,18 @@ export const createTenant = async (req, res) => {
       password: adminPassword,
       role: 'brokerage_admin',
       brokerageId: brokerage._id,
+      memberships: [
+        {
+          brokerageId: brokerage._id,
+          role: 'brokerage_admin',
+          status: 'active',
+          joinedAt: new Date(),
+        },
+      ],
       phone: phone || '',
       status: 'active',
+      mustChangePassword: true,
+      isTemporaryPassword: true,
     });
 
     brokerage.primaryAdminId = adminUser._id;
@@ -200,6 +211,9 @@ export const createTenant = async (req, res) => {
         });
       }
     }
+
+    // Automatically seed default webhook ingestion sources
+    await seedDefaultIngestionSources(brokerage._id);
 
     // Dispatch Platform Welcome Email
     sendBrokerageWelcomeEmail({

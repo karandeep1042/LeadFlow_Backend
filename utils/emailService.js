@@ -1,3 +1,4 @@
+import './dotenvLoader.js';
 import nodemailer from 'nodemailer';
 import EmailTemplate from '../models/EmailTemplate.js';
 import PlatformEmailTemplate from '../models/PlatformEmailTemplate.js';
@@ -5,6 +6,7 @@ import StageTrigger from '../models/StageTrigger.js';
 import Brokerage from '../models/Brokerage.js';
 import { DEFAULT_STAGE_CONFIGS, DEFAULT_ACCOUNT_TEMPLATES } from './defaultAutomations.js';
 import { DEFAULT_PLATFORM_TEMPLATES } from './defaultPlatformTemplates.js';
+import { getStageDisplayName } from './constants.js';
 
 let transporterPromise = null;
 let currentSmtpConfig = {
@@ -329,7 +331,8 @@ export const sendClientInvitationEmail = async ({
         <div style="font-size: 12px; font-weight: 700; color: #15803d; text-transform: uppercase; margin-bottom: 6px;">Your Secure Login Credentials</div>
         <div style="margin-bottom: 4px; font-size: 13px;"><span style="color: #4b5563;">Login URL:</span> <a href="${loginUrl}" style="color: #2563eb; font-weight: 600; text-decoration: none;">${loginUrl}</a></div>
         <div style="margin-bottom: 4px; font-size: 13px;"><span style="color: #4b5563;">Email Address:</span> <strong>${to}</strong></div>
-        <div style="font-size: 13px;"><span style="color: #4b5563;">Temporary Password:</span> <code style="background: #e2e8f0; padding: 2px 6px; border-radius: 4px; font-weight: 700; color: #0f172a;">${temporaryPassword}</code></div>
+        <div style="margin-bottom: 6px; font-size: 13px;"><span style="color: #4b5563;">Temporary Password:</span> <code style="background: #e2e8f0; padding: 2px 6px; border-radius: 4px; font-weight: 700; color: #0f172a;">${temporaryPassword}</code></div>
+        <div style="font-size: 12px; color: #64748b; margin-top: 6px;"><em>Note: You will be prompted to set your personal permanent password on your first sign-in.</em></div>
       </div>
     `;
 
@@ -403,13 +406,16 @@ export const sendAdvisorInvitationEmail = async ({
               <div style="margin-bottom: 6px; font-size: 13px;"><span style="color: #64748b;">Login Email:</span> <strong>${to}</strong></div>
               <div style="font-size: 13px;"><span style="color: #64748b;">Temporary Password:</span> <strong style="color: #2563eb;">${temporaryPassword}</strong></div>
             </div>
-            <div style="text-align: center; margin: 28px 0 20px 0;">
+            <p style="font-size: 13px; color: #475569; margin: 12px 0;">
+              <strong>Security Notice:</strong> This is a temporary password. You will be prompted to create your own permanent password immediately upon signing in for the first time.
+            </p>
+            <div style="text-align: center; margin: 24px 0 20px 0;">
               <a href="${loginUrl}" style="background-color: #2563eb; color: #ffffff; text-decoration: none; padding: 12px 24px; border-radius: 8px; font-weight: 600; font-size: 14px; display: inline-block;">
-                Sign In to Workspace
+                Sign In & Set Password
               </a>
             </div>
             <p style="font-size: 12px; color: #94a3b8; text-align: center; margin-bottom: 0;">
-              Please change your temporary password immediately upon your first sign in.
+              Please complete your initial password setup upon first login to access your mortgage workspace.
             </p>
           </div>
           <div style="background-color: #f8fafc; padding: 16px 24px; border-top: 1px solid #e2e8f0; text-align: center; font-size: 12px; color: #94a3b8;">
@@ -731,8 +737,9 @@ export const sendStageMilestoneEmail = async ({
     }
 
     const defaultConfig = DEFAULT_STAGE_CONFIGS.find((c) => c.stage === stage) || DEFAULT_STAGE_CONFIGS[0];
-    const rawSubject = template?.subject || defaultConfig?.subject || `Application Status Updated: ${stage} – {{brokerage_name}}`;
-    const rawBody = template?.body || defaultConfig?.body || `Dear {{client_name}},\n\nYour mortgage application has progressed to ${stage}.\n\nBest regards,\n{{brokerage_name}}`;
+    const displayStage = getStageDisplayName(stage);
+    const rawSubject = template?.subject || defaultConfig?.subject || `Application Status Updated: ${displayStage} – {{brokerage_name}}`;
+    const rawBody = template?.body || defaultConfig?.body || `Dear {{client_name}},\n\nYour mortgage application has progressed to ${displayStage}.\n\nBest regards,\n{{brokerage_name}}`;
 
     const vars = {
       clientName,
@@ -741,8 +748,8 @@ export const sendStageMilestoneEmail = async ({
       advisorEmail,
       advisorPhone,
       brokerageName,
-      stage,
-      stageLabel: defaultConfig?.stageLabel || stage,
+      stage: displayStage,
+      stageLabel: defaultConfig?.stageLabel || displayStage,
       loanAmount,
       city: city || 'Berlin',
       portalLink,
@@ -1230,7 +1237,8 @@ export const sendBrokerageWelcomeEmail = async ({
         <div style="font-size: 13px; color: #1e293b; line-height: 1.8;">
           <strong>Organization:</strong> ${brokerageName}<br/>
           <strong>Admin Login:</strong> <span style="font-family: monospace; color: #2563eb;">${to}</span><br/>
-          <strong>Temporary Password:</strong> <span style="font-family: monospace; background: #e2e8f0; padding: 2px 6px; border-radius: 4px;">${temporaryPassword}</span>
+          <strong>Temporary Password:</strong> <span style="font-family: monospace; background: #e2e8f0; padding: 2px 6px; border-radius: 4px;">${temporaryPassword}</span><br/>
+          <span style="font-size: 12px; color: #64748b;"><em>You will be prompted to set your personal permanent password on your first sign-in.</em></span>
         </div>
       </div>
     `;

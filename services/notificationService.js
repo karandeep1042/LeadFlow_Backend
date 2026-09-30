@@ -3,6 +3,7 @@ import User from '../models/User.js';
 import Brokerage from '../models/Brokerage.js';
 import { emitToBrokerage, emitToRole, emitToUser, emitToPlatformAdmins } from '../utils/socket.js';
 import { sendStageMilestoneEmail, sendDocumentRevisionEmail } from '../utils/emailService.js';
+import { getStageDisplayName } from '../utils/constants.js';
 
 /**
  * Persists a notification to MongoDB and emits real-time WebSocket events.
@@ -162,6 +163,7 @@ export const notifyStageUpdated = async ({
   stage,
   previousStage,
   updatedByAdvisorName,
+  updatedByAdvisorId,
   isBankRevisionRegression = false,
   revisionReason = '',
   rejectedDocs = [],
@@ -219,7 +221,7 @@ export const notifyStageUpdated = async ({
           recipientId: clientId,
           recipientRole: 'client',
           title: 'Application Status Updated',
-          message: `Your German mortgage application has progressed to ${stage}.`,
+          message: `Your German mortgage application has progressed to ${getStageDisplayName(stage)}.`,
           type: 'stage_updated',
           data: { leadId: lead._id, stage, url: '/client/portal' },
         });
@@ -272,8 +274,12 @@ export const notifyStageUpdated = async ({
     }
 
     // 3. Notify Assigned Advisor (In-App internal notification)
+    // Exclude the advisor if they are the actor who initiated this stage update
     const assignedAdvisorId = lead.assignedAdvisorId?._id || lead.assignedAdvisorId;
-    if (assignedAdvisorId) {
+    const actorId = updatedByAdvisorId ? String(updatedByAdvisorId) : null;
+    const isActorAssignedAdvisor = assignedAdvisorId && actorId && String(assignedAdvisorId) === actorId;
+
+    if (assignedAdvisorId && !isActorAssignedAdvisor) {
       await createNotification({
         brokerageId,
         recipientId: assignedAdvisorId,
@@ -281,7 +287,7 @@ export const notifyStageUpdated = async ({
         title: isRegression ? 'Client Case Reverted for Revision' : 'Client Stage Updated',
         message: isRegression
           ? `${leadName} reverted to Document Collection for lender revisions (${rejectedDocs.length} item(s) flagged)${updatedByAdvisorName ? ` by ${updatedByAdvisorName}` : ''}.`
-          : `${leadName} moved to ${stage}${updatedByAdvisorName ? ` by ${updatedByAdvisorName}` : ''}.`,
+          : `${leadName} moved to ${getStageDisplayName(stage)}${updatedByAdvisorName ? ` by ${updatedByAdvisorName}` : ''}.`,
         type: isRegression ? 'doc_revision' : 'stage_updated',
         data: { leadId: lead._id, stage, url: '/advisor/pipeline' },
       });
@@ -294,7 +300,7 @@ export const notifyStageUpdated = async ({
       title: isRegression ? 'Client Case Reverted for Revision' : 'Client Stage Updated',
       message: isRegression
         ? `${leadName} reverted to Document Collection for lender revisions (${rejectedDocs.length} item(s) flagged)${updatedByAdvisorName ? ` by ${updatedByAdvisorName}` : ''}.`
-        : `${leadName} moved to ${stage}${updatedByAdvisorName ? ` by ${updatedByAdvisorName}` : ''}.`,
+        : `${leadName} moved to ${getStageDisplayName(stage)}${updatedByAdvisorName ? ` by ${updatedByAdvisorName}` : ''}.`,
       type: isRegression ? 'doc_revision' : 'stage_updated',
       data: { leadId: lead._id, stage, url: '/advisor/pipeline' },
     });
@@ -317,7 +323,7 @@ export const notifyStageUpdated = async ({
           brokerageId,
           recipientRole: 'platform_admin',
           title: 'Loan Approved / Deal Completed',
-          message: `${leadName}${amountStr} at ${bName} reached "${stage}".`,
+          message: `${leadName}${amountStr} at ${bName} reached "${getStageDisplayName(stage)}".`,
           type: 'lead_completed',
           data: { leadId: lead._id, brokerageId, stage, url: '/platform-admin/analytics' },
         });
@@ -326,7 +332,7 @@ export const notifyStageUpdated = async ({
           brokerageId,
           recipientRole: 'platform_admin',
           title: 'Lead Closed / Deal Failed',
-          message: `${leadName}${amountStr} at ${bName} was closed as "${stage}".`,
+          message: `${leadName}${amountStr} at ${bName} was closed as "${getStageDisplayName(stage)}".`,
           type: 'lead_failed',
           data: { leadId: lead._id, brokerageId, stage, url: '/platform-admin/analytics' },
         });

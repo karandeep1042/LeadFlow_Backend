@@ -6,6 +6,7 @@ import { emitToBrokerage, emitToUser } from '../utils/socket.js';
 import { calculateLeadDocsSummary } from './leadController.js';
 import { notifyAllDocumentsUploaded, notifyDocumentRejected } from '../services/notificationService.js';
 import cacheService from '../services/cacheService.js';
+import { uploadBufferToCloudinary, saveBufferLocally } from '../utils/cloudinary.js';
 
 export const invalidateDocumentCaches = async (brokerageId, leadId = null, clientId = null) => {
   if (!brokerageId) return;
@@ -189,8 +190,49 @@ export const uploadDocument = async (req, res) => {
       }
     }
 
-    const effectiveFileName = fileName || `${docType}.pdf`;
-    const effectiveFileUrl = `https://storage.leadflow.de/docs/${effectiveClientId}/${effectiveFileName}`;
+    const effectiveFileName = req.file?.originalname || fileName || `${docType}.pdf`;
+    let effectiveFileSize = req.file?.size || Number(fileSize) || 1024 * 1024;
+    const effectiveMimeType = req.file?.mimetype || req.body.mimeType || 'application/pdf';
+    let effectiveFileUrl = '';
+    let cloudinaryPublicId = null;
+
+    if (req.file && req.file.buffer) {
+      try {
+        const cleanName = effectiveFileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const uploadResult = await uploadBufferToCloudinary(req.file.buffer, {
+          folder: `leadflow/documents/${effectiveClientId}`,
+          filename: `${docType}_${Date.now()}_${cleanName}`,
+          resource_type: 'auto',
+        });
+
+        effectiveFileUrl = uploadResult.secure_url || uploadResult.url;
+        cloudinaryPublicId = uploadResult.public_id || null;
+        if (uploadResult.bytes) {
+          effectiveFileSize = uploadResult.bytes;
+        }
+      } catch (cErr) {
+        console.error('[Upload Processing Failed, attempting local storage]:', cErr.message);
+        try {
+          const cleanName = effectiveFileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+          const localResult = await saveBufferLocally(req.file.buffer, {
+            filename: `${docType}_${Date.now()}_${cleanName}`,
+          });
+          effectiveFileUrl = localResult.secure_url || localResult.url;
+          cloudinaryPublicId = localResult.public_id || null;
+        } catch (localErr) {
+          console.error('[Local Storage Emergency Fallback Failed]:', localErr.message);
+        }
+      }
+    } else if (req.body.fileUrl) {
+      effectiveFileUrl = req.body.fileUrl;
+    }
+
+    if (!effectiveFileUrl) {
+      return res.status(400).json({
+        success: false,
+        message: 'No document file provided. Please attach a valid file to upload.',
+      });
+    }
 
     // Upsert: find an existing doc for this client+docType and update it in place,
     // or create a new one if none exists. This guarantees exactly ONE document record
@@ -213,7 +255,9 @@ export const uploadDocument = async (req, res) => {
           title: title || docType.replace(/_/g, ' ').toUpperCase(),
           fileName: effectiveFileName,
           fileUrl: effectiveFileUrl,
-          fileSize: fileSize || 1024 * 1024,
+          fileSize: effectiveFileSize,
+          mimeType: effectiveMimeType,
+          cloudinaryPublicId: cloudinaryPublicId,
           status: 'processing',
           advisorApproved: false,
           rejectionReason: null,
@@ -260,7 +304,7 @@ export const uploadDocument = async (req, res) => {
       })();
     }
 
-    await invalidateDocumentCaches(req.user.brokerageId, associatedLead?._id, doc.clientId);
+    await invalidateDocumentCaches(req.user.brokerageId, associatedLead?._id, effectiveClientId);
 
     return res.status(201).json({ success: true, data: populatedDoc });
   } catch (error) {

@@ -1,6 +1,10 @@
 import User from '../models/User.js';
 import Brokerage from '../models/Brokerage.js';
 import EmailVerification from '../models/EmailVerification.js';
+import EmailTemplate from '../models/EmailTemplate.js';
+import StageTrigger from '../models/StageTrigger.js';
+import { DEFAULT_STAGE_CONFIGS, DEFAULT_ACCOUNT_TEMPLATES } from '../utils/defaultAutomations.js';
+import { seedDefaultIngestionSources } from '../utils/defaultIngestionSources.js';
 import {
   generateAccessToken,
   generateRefreshToken,
@@ -94,6 +98,14 @@ export const registerBrokerage = async (req, res) => {
       password,
       role: 'brokerage_admin',
       brokerageId: brokerage._id,
+      memberships: [
+        {
+          brokerageId: brokerage._id,
+          role: 'brokerage_admin',
+          status: 'active',
+          joinedAt: new Date(),
+        },
+      ],
       phone: phone ? phone.trim() : '',
       status: 'active',
     });
@@ -101,11 +113,62 @@ export const registerBrokerage = async (req, res) => {
     brokerage.primaryAdminId = user._id;
     await brokerage.save();
 
+    // Automatically seed default email templates for this new brokerage
+    for (const tpl of DEFAULT_ACCOUNT_TEMPLATES) {
+      const exists = await EmailTemplate.findOne({ brokerageId: brokerage._id, name: tpl.name });
+      if (!exists) {
+        await EmailTemplate.create({
+          brokerageId: brokerage._id,
+          name: tpl.name,
+          subject: tpl.subject,
+          body: tpl.body,
+          description: tpl.description || '',
+        });
+      }
+    }
+
+    // Automatically seed default stage triggers for this new brokerage
+    for (const cfg of DEFAULT_STAGE_CONFIGS) {
+      const exists = await StageTrigger.findOne({ brokerageId: brokerage._id, stage: cfg.stage });
+      if (!exists) {
+        let tpl = await EmailTemplate.findOne({ brokerageId: brokerage._id, name: cfg.templateName });
+        if (!tpl) {
+          tpl = await EmailTemplate.create({
+            brokerageId: brokerage._id,
+            name: cfg.templateName,
+            subject: cfg.subject,
+            body: cfg.body,
+            description: `Automated trigger template for stage: ${cfg.stage}`,
+          });
+        }
+        await StageTrigger.create({
+          brokerageId: brokerage._id,
+          stage: cfg.stage,
+          stageLabel: cfg.stageLabel,
+          isActive: true,
+          emailTemplateId: tpl._id,
+          autoTaskEnabled: true,
+          defaultTaskTitle: cfg.taskTitle,
+          defaultTaskPriority: cfg.taskPriority,
+          defaultTaskDueHours: cfg.taskDueHours,
+        });
+      }
+    }
+
+    // Automatically seed default webhook ingestion sources
+    await seedDefaultIngestionSources(brokerage._id);
+
     // Clean up temporary email verification records
     await EmailVerification.deleteMany({ email: normalizedEmail });
 
-    const accessToken = generateAccessToken(user);
-    const refreshToken = generateRefreshToken(user);
+    const workspaces = await user.getWorkspaces();
+    const activeWorkspace = workspaces[0] || {
+      brokerageId: brokerage._id.toString(),
+      role: 'brokerage_admin',
+    };
+
+    const accessToken = generateAccessToken(user, activeWorkspace);
+    const refreshToken = generateRefreshToken(user, activeWorkspace);
 
     user.refreshToken = refreshToken;
     await user.save();
@@ -133,9 +196,11 @@ export const registerBrokerage = async (req, res) => {
           status: brokerage.status,
         },
         brokerageName: brokerage.name,
+        workspaces,
       },
       role: user.role,
       brokerageId: user.brokerageId,
+      workspaces,
     });
   } catch (error) {
     console.error('Register brokerage error:', error);
@@ -146,10 +211,10 @@ export const registerBrokerage = async (req, res) => {
   }
 };
 
-// 2. Universal User Login
+// 2. Universal User Login (Multi-Tenant & Multi-Workspace Capable)
 export const login = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email, password, brokerageId, role } = req.body;
 
     if (!email || !password) {
       return res.status(400).json({
@@ -181,13 +246,59 @@ export const login = async (req, res) => {
       });
     }
 
+    // Retrieve all active workspaces the user belongs to
+    const workspaces = await user.getWorkspaces();
+
+    if (!workspaces || workspaces.length === 0) {
+      return res.status(403).json({
+        success: false,
+        message: 'Your account is not linked to any active organization or workspace.',
+      });
+    }
+
+    let chosenWorkspace = null;
+
+    // A) If a specific workspace was requested in the login payload
+    if (brokerageId !== undefined || role !== undefined) {
+      chosenWorkspace = workspaces.find((w) => {
+        if (role === 'platform_admin' && w.role === 'platform_admin') return true;
+        if (brokerageId && w.brokerageId === brokerageId.toString()) {
+          if (role) return w.role === role;
+          return true;
+        }
+        return false;
+      });
+
+      if (!chosenWorkspace) {
+        return res.status(400).json({
+          success: false,
+          message: 'Selected workspace or role was not found for this account.',
+        });
+      }
+    }
+    // B) If user belongs to only 1 workspace, log in automatically
+    else if (workspaces.length === 1) {
+      chosenWorkspace = workspaces[0];
+    }
+    // C) If user belongs to multiple workspaces and hasn't chosen one yet, return workspace list for selection
+    else {
+      return res.status(200).json({
+        success: true,
+        requiresWorkspaceSelection: true,
+        email: user.email,
+        name: user.name,
+        workspaces,
+      });
+    }
+
+    // Validate selected brokerage subscription status
     let userBrokerage = null;
-    if (user.role !== 'platform_admin' && user.brokerageId) {
-      const brokerage = await Brokerage.findById(user.brokerageId);
+    if (chosenWorkspace.role !== 'platform_admin' && chosenWorkspace.brokerageId) {
+      const brokerage = await Brokerage.findById(chosenWorkspace.brokerageId);
       if (brokerage && brokerage.status === 'suspended') {
         return res.status(403).json({
           success: false,
-          message: 'Your brokerage subscription is currently suspended.',
+          message: 'The selected brokerage subscription is currently suspended.',
         });
       }
       if (brokerage) {
@@ -201,8 +312,8 @@ export const login = async (req, res) => {
       }
     }
 
-    const accessToken = generateAccessToken(user);
-    const refreshToken = generateRefreshToken(user);
+    const accessToken = generateAccessToken(user, chosenWorkspace);
+    const refreshToken = generateRefreshToken(user, chosenWorkspace);
 
     user.refreshToken = refreshToken;
     await user.save();
@@ -213,17 +324,21 @@ export const login = async (req, res) => {
       success: true,
       message: 'Login successful.',
       accessToken,
+      mustChangePassword: user.mustChangePassword || false,
       user: {
         id: user._id,
         name: user.name,
         email: user.email,
-        role: user.role,
-        brokerageId: user.brokerageId,
+        role: chosenWorkspace.role,
+        brokerageId: chosenWorkspace.brokerageId,
         brokerage: userBrokerage,
-        brokerageName: userBrokerage?.name,
+        brokerageName: chosenWorkspace.brokerageName,
+        mustChangePassword: user.mustChangePassword || false,
+        workspaces,
       },
-      role: user.role,
-      brokerageId: user.brokerageId,
+      role: chosenWorkspace.role,
+      brokerageId: chosenWorkspace.brokerageId,
+      workspaces,
     });
   } catch (error) {
     console.error('Login error:', error);
@@ -234,7 +349,88 @@ export const login = async (req, res) => {
   }
 };
 
-// 3. Refresh Token Handler
+// 3. Switch Workspace (Instant In-App Tenant & Role Switch)
+export const switchWorkspace = async (req, res) => {
+  try {
+    const { brokerageId, role } = req.body;
+    const user = await User.findById(req.user._id || req.user.id);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User account not found.' });
+    }
+
+    const workspaces = await user.getWorkspaces();
+    const targetWorkspace = workspaces.find((w) => {
+      if (role === 'platform_admin' && w.role === 'platform_admin') return true;
+      if (brokerageId && w.brokerageId === brokerageId.toString()) {
+        if (role) return w.role === role;
+        return true;
+      }
+      return false;
+    });
+
+    if (!targetWorkspace) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have active access to the requested organization or role.',
+      });
+    }
+
+    let userBrokerage = null;
+    if (targetWorkspace.role !== 'platform_admin' && targetWorkspace.brokerageId) {
+      const brokerage = await Brokerage.findById(targetWorkspace.brokerageId);
+      if (brokerage && brokerage.status === 'suspended') {
+        return res.status(403).json({
+          success: false,
+          message: 'The requested brokerage subscription is suspended.',
+        });
+      }
+      if (brokerage) {
+        userBrokerage = {
+          id: brokerage._id,
+          _id: brokerage._id,
+          name: brokerage.name,
+          city: brokerage.city,
+          status: brokerage.status,
+        };
+      }
+    }
+
+    const accessToken = generateAccessToken(user, targetWorkspace);
+    const refreshToken = generateRefreshToken(user, targetWorkspace);
+
+    user.refreshToken = refreshToken;
+    await user.save();
+
+    setRefreshTokenCookie(res, refreshToken);
+
+    return res.status(200).json({
+      success: true,
+      message: `Switched to ${targetWorkspace.brokerageName} (${targetWorkspace.role}) successfully.`,
+      accessToken,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: targetWorkspace.role,
+        brokerageId: targetWorkspace.brokerageId,
+        brokerage: userBrokerage,
+        brokerageName: targetWorkspace.brokerageName,
+        workspaces,
+      },
+      role: targetWorkspace.role,
+      brokerageId: targetWorkspace.brokerageId,
+      workspaces,
+    });
+  } catch (error) {
+    console.error('Switch workspace error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error switching workspace.',
+    });
+  }
+};
+
+// 4. Refresh Token Handler
 export const refreshToken = async (req, res) => {
   try {
     const token = req.cookies?.refreshToken || req.body?.refreshToken;
@@ -254,8 +450,13 @@ export const refreshToken = async (req, res) => {
       return res.status(401).json({ success: false, message: 'User no longer active.' });
     }
 
-    const newAccessToken = generateAccessToken(user);
-    const newRefreshToken = generateRefreshToken(user);
+    const scopedContext = {
+      role: decoded.role,
+      brokerageId: decoded.brokerageId,
+    };
+
+    const newAccessToken = generateAccessToken(user, scopedContext);
+    const newRefreshToken = generateRefreshToken(user, scopedContext);
 
     user.refreshToken = newRefreshToken;
     await user.save();
@@ -272,13 +473,41 @@ export const refreshToken = async (req, res) => {
   }
 };
 
-// 4. Get Current User Profile
+// 5. Get Current User Profile
 export const getCurrentUser = async (req, res) => {
   try {
-    const user = await User.findById(req.user._id).populate('brokerageId', 'name city status');
+    const user = await User.findById(req.user._id);
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
+
+    const workspaces = await user.getWorkspaces();
+    const activeRole = req.userRole || req.user.role;
+    const activeBrokerageId = req.brokerageId !== undefined ? req.brokerageId : user.brokerageId;
+
+    let userBrokerage = null;
+    if (activeRole !== 'platform_admin' && activeBrokerageId) {
+      const brokerage = await Brokerage.findById(activeBrokerageId);
+      if (brokerage) {
+        userBrokerage = {
+          id: brokerage._id,
+          _id: brokerage._id,
+          name: brokerage.name,
+          city: brokerage.city,
+          status: brokerage.status,
+        };
+      }
+    }
+
+    const currentWorkspace =
+      workspaces.find((w) => {
+        if (activeRole === 'platform_admin') return w.role === 'platform_admin';
+        return (
+          w.role === activeRole &&
+          w.brokerageId &&
+          w.brokerageId.toString() === (activeBrokerageId?._id || activeBrokerageId)?.toString()
+        );
+      }) || workspaces[0];
 
     return res.status(200).json({
       success: true,
@@ -286,15 +515,18 @@ export const getCurrentUser = async (req, res) => {
         id: user._id,
         name: user.name,
         email: user.email,
-        role: user.role,
-        brokerageId: user.brokerageId?._id || user.brokerageId,
-        brokerage: user.brokerageId,
-        brokerageName: user.brokerageId?.name,
+        role: activeRole,
+        brokerageId: activeBrokerageId?._id || activeBrokerageId,
+        brokerage: userBrokerage,
+        brokerageName: userBrokerage?.name || currentWorkspace?.brokerageName,
         phone: user.phone,
         status: user.status,
+        mustChangePassword: user.mustChangePassword || false,
+        workspaces,
       },
-      role: user.role,
-      brokerageId: user.brokerageId?._id || user.brokerageId,
+      role: activeRole,
+      brokerageId: activeBrokerageId?._id || activeBrokerageId,
+      workspaces,
     });
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Server error' });
@@ -330,6 +562,8 @@ export const updateProfile = async (req, res) => {
         return res.status(400).json({ success: false, message: passwordValidation.message });
       }
       user.password = newPassword;
+      user.mustChangePassword = false;
+      user.isTemporaryPassword = false;
     }
 
     await user.save();
@@ -340,6 +574,70 @@ export const updateProfile = async (req, res) => {
     });
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Failed to update profile' });
+  }
+};
+
+// 5b. Set Initial / Temporary Password (Mandatory First-Time Setup)
+export const setInitialPassword = async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    const userId = req.user?._id || req.user?.id;
+
+    if (!newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide a new password.',
+      });
+    }
+
+    const user = await User.findById(userId).select('+password');
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User account not found.' });
+    }
+
+    // If current/temporary password is provided, verify it
+    if (currentPassword) {
+      const isMatch = await user.comparePassword(currentPassword);
+      if (!isMatch) {
+        return res.status(400).json({
+          success: false,
+          message: 'Incorrect current/temporary password. Please check and try again.',
+        });
+      }
+    }
+
+    // Validate password strength according to standard rules
+    const passwordValidation = validatePasswordStrength(newPassword);
+    if (!passwordValidation.isValid) {
+      return res.status(400).json({
+        success: false,
+        message: passwordValidation.message,
+      });
+    }
+
+    user.password = newPassword;
+    user.mustChangePassword = false;
+    user.isTemporaryPassword = false;
+    await user.save();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Your password has been set successfully. Welcome to LeadFlow!',
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: req.userRole || user.role,
+        brokerageId: req.brokerageId || user.brokerageId,
+        mustChangePassword: false,
+      },
+    });
+  } catch (error) {
+    console.error('Error setting initial password:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update password. Please try again.',
+    });
   }
 };
 

@@ -43,8 +43,10 @@ export const getClients = async (req, res) => {
 
     // 1. Fetch all client users in this brokerage
     const clientUsers = await User.find({
-      brokerageId,
-      role: 'client',
+      $or: [
+        { brokerageId, role: 'client' },
+        { memberships: { $elemMatch: { brokerageId, role: 'client' } } },
+      ],
     }).select('-password -refreshToken').lean();
 
     // 2. Fetch all leads in this brokerage with populated advisor and client
@@ -205,7 +207,7 @@ export const updateClientStatus = async (req, res) => {
       lead = await Lead.findOne({ _id: clientId, brokerageId }).populate('assignedAdvisorId');
       if (lead) {
         const normEmail = (lead.email || '').toLowerCase().trim();
-        user = await User.findOne({ email: normEmail, brokerageId });
+        user = await User.findOne({ email: normEmail });
         if (!user) {
           user = await User.create({
             name: `${lead.firstName} ${lead.lastName || ''}`.trim() || 'Client',
@@ -213,10 +215,40 @@ export const updateClientStatus = async (req, res) => {
             password: 'Password@123',
             role: 'client',
             brokerageId,
+            memberships: [
+              {
+                brokerageId,
+                role: 'client',
+                status,
+                joinedAt: new Date(),
+              },
+            ],
             phone: lead.phone || '',
             status,
+            mustChangePassword: true,
+            isTemporaryPassword: true,
           });
           isNewlyCreatedUser = true;
+          lead.clientId = user._id;
+          lead.isConverted = true;
+          await lead.save();
+        } else {
+          // Add or update membership for this brokerage
+          if (!user.memberships) user.memberships = [];
+          const existingMem = user.memberships.find(
+            (m) => m.brokerageId && m.brokerageId.toString() === brokerageId.toString() && m.role === 'client'
+          );
+          if (existingMem) {
+            existingMem.status = status;
+          } else {
+            user.memberships.push({
+              brokerageId,
+              role: 'client',
+              status,
+              joinedAt: new Date(),
+            });
+          }
+          await user.save();
           lead.clientId = user._id;
           lead.isConverted = true;
           await lead.save();

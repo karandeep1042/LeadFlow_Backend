@@ -15,8 +15,8 @@ const buildNotificationFilter = (brokerageId, userId, userRole, unreadOnly = fal
       ...base,
       $or: [
         { recipientId: userId },
-        { recipientRole: 'platform_admin' },
-        { recipientRole: 'all' },
+        { recipientRole: 'platform_admin', recipientId: null },
+        { recipientRole: 'all', recipientId: null },
       ],
     };
   }
@@ -30,7 +30,7 @@ const buildNotificationFilter = (brokerageId, userId, userRole, unreadOnly = fal
       ...base,
       $or: [
         { recipientId: userId },
-        { recipientRole: 'client' },
+        { recipientRole: 'client', recipientId: null },
       ],
     };
   }
@@ -40,8 +40,8 @@ const buildNotificationFilter = (brokerageId, userId, userRole, unreadOnly = fal
       ...base,
       $or: [
         { recipientId: userId },
-        { recipientRole: 'advisor' },
-        { recipientRole: 'all' },
+        { recipientRole: 'advisor', recipientId: null },
+        { recipientRole: 'all', recipientId: null },
       ],
     };
   }
@@ -51,8 +51,8 @@ const buildNotificationFilter = (brokerageId, userId, userRole, unreadOnly = fal
       ...base,
       $or: [
         { recipientId: userId },
-        { recipientRole: 'brokerage_admin' },
-        { recipientRole: 'all' },
+        { recipientRole: 'brokerage_admin', recipientId: null },
+        { recipientRole: 'all', recipientId: null },
       ],
     };
   }
@@ -61,8 +61,8 @@ const buildNotificationFilter = (brokerageId, userId, userRole, unreadOnly = fal
     ...base,
     $or: [
       { recipientId: userId },
-      { recipientRole: userRole },
-      { recipientRole: 'all' },
+      { recipientRole: userRole, recipientId: null },
+      { recipientRole: 'all', recipientId: null },
     ],
   };
 };

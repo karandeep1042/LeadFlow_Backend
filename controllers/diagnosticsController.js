@@ -1,8 +1,9 @@
 import mongoose from 'mongoose';
 import SystemConfig from '../models/SystemConfig.js';
-import { isRedisReady, testRedisConnection, initRedisClient, getCurrentRedisUrl, getRedisClient } from '../utils/redis.js';
-import { testDatabaseConnection, connectDB, getCurrentMongoUri } from '../utils/db.js';
+import { isRedisReady, testRedisConnection, initRedisClient, getCurrentRedisUrl, getRedisClient, getRedisHost, resolveRedisConfig } from '../utils/redis.js';
+import { testDatabaseConnection, connectDB, getCurrentMongoUri, parseMongoUriInfo, maskMongoUri } from '../utils/db.js';
 import { testSmtpConfig, setTransporterConfig, getCurrentSmtpConfig } from '../utils/emailService.js';
+import { updateEnvVariable } from '../utils/envHelper.js';
 
 /**
  * 1. Get Platform Infrastructure Health & Sanitized Configs
@@ -14,18 +15,21 @@ export const getPlatformHealth = async (req, res) => {
     let dbStatus = 'disconnected';
     let dbLatencyMs = 0;
     let dbCollections = 0;
-    let dbHost = '127.0.0.1';
-    let dbName = 'leadflow';
+    const mongoUri = getCurrentMongoUri();
+    const uriInfo = parseMongoUriInfo(mongoUri);
+    let dbHost = uriInfo.host || '127.0.0.1';
+    let dbName = uriInfo.databaseName || 'leadflow';
 
     if (mongoose.connection.readyState === 1 && mongoose.connection.db) {
       try {
+        const pingStart = Date.now();
         await mongoose.connection.db.admin().ping();
-        dbLatencyMs = Date.now() - dbStartTime;
+        dbLatencyMs = Date.now() - pingStart;
         dbStatus = 'connected';
         const cols = await mongoose.connection.db.listCollections().toArray();
         dbCollections = cols.length;
-        dbHost = mongoose.connection.host || '127.0.0.1';
-        dbName = mongoose.connection.name || 'leadflow';
+        dbHost = uriInfo.host || mongoose.connection.host || '127.0.0.1';
+        dbName = mongoose.connection.name || uriInfo.databaseName || 'leadflow';
       } catch (err) {
         dbStatus = 'error';
       }
@@ -33,30 +37,58 @@ export const getPlatformHealth = async (req, res) => {
 
     // 2. Redis Health
     const redisStartTime = Date.now();
-    let redisStatus = isRedisReady() ? 'connected' : 'fallback_memory';
+    let redisStatus = 'fallback_memory';
     let redisLatencyMs = 0;
     let redisKeyCount = 0;
     const redisClient = getRedisClient();
+    const redisUrl = getCurrentRedisUrl();
+    const redisHost = getRedisHost();
+    const redisResolved = resolveRedisConfig(redisUrl);
 
-    if (redisClient && isRedisReady()) {
+    if (redisClient) {
       try {
-        await redisClient.ping();
-        redisLatencyMs = Date.now() - redisStartTime;
-        redisKeyCount = await redisClient.dbsize();
+        const pingStart = Date.now();
+        const pingRes = await redisClient.ping();
+        if (pingRes) {
+          redisLatencyMs = Date.now() - pingStart;
+          redisStatus = 'connected';
+          try {
+            redisKeyCount = await redisClient.dbsize();
+          } catch (_) {}
+        }
       } catch (_) {
         redisStatus = 'fallback_memory';
       }
     }
+
+    let redisMode = 'In-Memory Cache Fallback';
+    if (redisStatus === 'connected') {
+      if (redisResolved?.isUpstash) {
+        redisMode = 'Upstash Serverless Redis (Cloud)';
+      } else if (redisResolved?.isCloud) {
+        redisMode = 'Redis Active Cloud Cluster';
+      } else {
+        redisMode = 'Redis Active Instance';
+      }
+    }
+
+    // Retrieve custom hostName / alias from SystemConfig or env
+    let configuredHostName = process.env.REDIS_HOST_NAME || '';
+    try {
+      const redisConfigDoc = await SystemConfig.findOne({ key: 'redis' }).lean();
+      if (redisConfigDoc?.config?.hostName) {
+        configuredHostName = redisConfigDoc.config.hostName;
+      }
+    } catch (_) {}
+
+    const displayHostName = configuredHostName || (redisStatus === 'connected' ? (redisResolved?.isUpstash ? 'Upstash Redis Cloud' : redisHost) : 'In-Memory Cache');
 
     // 3. SMTP Health
     const smtpConfig = getCurrentSmtpConfig();
     const smtpHealth = await testSmtpConfig();
 
     // Sanitized Configs
-    const mongoUri = getCurrentMongoUri();
-    const maskedMongoUri = mongoUri ? mongoUri.replace(/:\/\/([^:]+):([^@]+)@/, '://$1:••••••••@') : '';
-
-    const redisUrl = getCurrentRedisUrl();
+    const maskedMongoUri = maskMongoUri(mongoUri);
     const maskedRedisUrl = redisUrl ? redisUrl.replace(/:\/\/([^:]+):([^@]+)@/, '://$1:••••••••@') : '';
 
     return res.status(200).json({
@@ -73,9 +105,12 @@ export const getPlatformHealth = async (req, res) => {
         },
         redis: {
           status: redisStatus,
-          mode: isRedisReady() ? 'Redis Active Cluster/Instance' : 'In-Memory Cache Fallback',
-          latencyMs: redisLatencyMs,
+          hostName: displayHostName,
+          configuredHostName: configuredHostName,
+          host: redisHost,
+          mode: redisMode,
           keyCount: redisKeyCount,
+          latencyMs: redisLatencyMs,
           maskedUrl: maskedRedisUrl,
           rawUrl: redisUrl,
         },
@@ -142,7 +177,8 @@ export const updatePlatformServiceCredentials = async (req, res) => {
         return res.status(400).json({ success: false, message: 'MongoDB Connection URI is required.' });
       }
 
-      const testResult = await testDatabaseConnection(mongoUri.trim());
+      const cleanUri = mongoUri.trim();
+      const testResult = await testDatabaseConnection(cleanUri);
       if (!testResult.success) {
         return res.status(400).json({
           success: false,
@@ -150,19 +186,22 @@ export const updatePlatformServiceCredentials = async (req, res) => {
         });
       }
 
-      await connectDB(mongoUri.trim());
+      await connectDB(cleanUri);
+      process.env.MONGO_URI = cleanUri;
+      updateEnvVariable('MONGO_URI', cleanUri);
+
       await SystemConfig.findOneAndUpdate(
         { key: 'database' },
         {
           key: 'database',
-          config: { mongoUri: mongoUri.trim() },
+          config: { mongoUri: cleanUri },
           lastStatus: 'connected',
           lastMessage: testResult.message,
           lastTestedAt: new Date(),
           latencyMs: testResult.latencyMs || 0,
           updatedBy: req.user?._id,
         },
-        { upsert: true, new: true }
+        { upsert: true, returnDocument: 'after' }
       );
 
       return res.status(200).json({
@@ -173,8 +212,9 @@ export const updatePlatformServiceCredentials = async (req, res) => {
     }
 
     if (type === 'redis') {
-      const { redisUrl } = payload;
-      let effectiveUrl = redisUrl ? redisUrl.trim() : '';
+      const { redisUrl, hostName } = payload || {};
+      let effectiveUrl = redisUrl !== undefined ? redisUrl.trim() : (getCurrentRedisUrl() || '');
+      const effectiveHostName = (hostName !== undefined ? hostName : (process.env.REDIS_HOST_NAME || '')).trim();
       let testDetails = null;
 
       if (effectiveUrl) {
@@ -192,17 +232,23 @@ export const updatePlatformServiceCredentials = async (req, res) => {
       }
 
       initRedisClient(effectiveUrl);
+      process.env.REDIS_URL = effectiveUrl;
+      process.env.REDIS_HOST_NAME = effectiveHostName;
+      updateEnvVariable('REDIS_URL', effectiveUrl);
+      updateEnvVariable('REDIS_HOST_NAME', effectiveHostName);
+
       await SystemConfig.findOneAndUpdate(
         { key: 'redis' },
         {
           key: 'redis',
-          config: { redisUrl: effectiveUrl },
+          config: { redisUrl: effectiveUrl, hostName: effectiveHostName },
           lastStatus: effectiveUrl ? 'connected' : 'fallback',
           lastMessage: effectiveUrl ? 'Redis active' : 'Running in memory fallback mode',
           lastTestedAt: new Date(),
+          latencyMs: testDetails ? testDetails.latencyMs : 0,
           updatedBy: req.user?._id,
         },
-        { upsert: true, new: true }
+        { upsert: true, returnDocument: 'after' }
       );
 
       return res.status(200).json({
@@ -227,6 +273,9 @@ export const updatePlatformServiceCredentials = async (req, res) => {
       }
 
       setTransporterConfig({ service, host, port, secure, user, pass });
+      if (user) updateEnvVariable('EMAIL_USER', user);
+      if (pass) updateEnvVariable('EMAIL_PASS', pass);
+
       await SystemConfig.findOneAndUpdate(
         { key: 'smtp' },
         {
@@ -238,7 +287,7 @@ export const updatePlatformServiceCredentials = async (req, res) => {
           latencyMs: testResult.latencyMs || 0,
           updatedBy: req.user?._id,
         },
-        { upsert: true, new: true }
+        { upsert: true, returnDocument: 'after' }
       );
 
       return res.status(200).json({

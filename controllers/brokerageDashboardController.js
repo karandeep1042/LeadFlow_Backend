@@ -147,20 +147,43 @@ export const getBrokerageDashboardStats = async (req, res) => {
       .lean();
 
     // 7. Tasks & SLA Snapshot
-    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    const totalTasks = await Task.countDocuments({ brokerageId });
-    const pendingTasks = await Task.countDocuments({ brokerageId, isCompleted: false });
-    const overdueTasks = await Task.countDocuments({
-      brokerageId,
-      isCompleted: false,
-      dueAt: { $lt: new Date() },
-    });
-    const completedTasks = await Task.countDocuments({ brokerageId, isCompleted: true });
-    const recentCompleted7d = await Task.countDocuments({
-      brokerageId,
-      isCompleted: true,
-      completedAt: { $gte: sevenDaysAgo },
-    });
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+    const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+    const [
+      totalTasks,
+      pendingTasks,
+      overdueTasks,
+      dueTodayTasks,
+      upcomingTasks,
+      completedTasks,
+      recentCompleted7d,
+    ] = await Promise.all([
+      Task.countDocuments({ brokerageId }),
+      Task.countDocuments({ brokerageId, isCompleted: false }),
+      Task.countDocuments({
+        brokerageId,
+        isCompleted: false,
+        dueAt: { $lt: now },
+      }),
+      Task.countDocuments({
+        brokerageId,
+        isCompleted: false,
+        dueAt: { $gte: startOfDay, $lte: endOfDay },
+      }),
+      Task.countDocuments({
+        brokerageId,
+        isCompleted: false,
+        dueAt: { $gt: endOfDay },
+      }),
+      Task.countDocuments({ brokerageId, isCompleted: true }),
+      Task.countDocuments({
+        brokerageId,
+        isCompleted: true,
+        completedAt: { $gte: sevenDaysAgo },
+      }),
+    ]);
     const archivedTasks = Math.max(0, completedTasks - recentCompleted7d);
 
     let pipelineVolumeFormatted = '€0.0M';
@@ -217,6 +240,8 @@ export const getBrokerageDashboardStats = async (req, res) => {
           totalTasks,
           pendingTasks,
           overdueTasks,
+          dueTodayTasks,
+          upcomingTasks,
           completedTasks,
           recentCompleted7d,
           archivedTasks,
