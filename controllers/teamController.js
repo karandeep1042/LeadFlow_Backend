@@ -258,10 +258,11 @@ export const updateAdvisorStatus = async (req, res) => {
 
     await advisor.save();
 
-    // Invalidate Team and Dashboard caches
+    // Invalidate Team, Dashboard, and Lead caches
     await Promise.all([
       cacheService.del(cacheService.generateKey(req.user.brokerageId, 'team', 'advisors')),
       cacheService.del(cacheService.generateKey(req.user.brokerageId, 'dash', 'stats')),
+      cacheService.invalidatePattern(cacheService.generateKey(req.user.brokerageId, 'leads', '*')),
     ]).catch(() => {});
 
     const advisorObj = advisor.toObject();
@@ -457,11 +458,12 @@ export const deleteAdvisor = async (req, res) => {
       await advisor.save();
     }
 
-    // 6. Invalidate Team, Dashboard, and Client Caches
+    // 6. Invalidate Team, Dashboard, Client, and Lead Caches
     await Promise.all([
       cacheService.del(cacheService.generateKey(brokerageId, 'team', 'advisors')),
       cacheService.del(cacheService.generateKey(brokerageId, 'dash', 'stats')),
-      cacheService.del(cacheService.generateKey(brokerageId, 'clients', 'all')),
+      cacheService.invalidatePattern(cacheService.generateKey(brokerageId, 'client', '*')),
+      cacheService.invalidatePattern(cacheService.generateKey(brokerageId, 'leads', '*')),
     ]).catch(() => {});
 
     return res.status(200).json({

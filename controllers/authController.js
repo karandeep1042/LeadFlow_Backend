@@ -19,6 +19,7 @@ import {
   sendSignupVerificationEmail,
 } from '../utils/emailService.js';
 import { notifyBrokerageRegistered } from '../services/notificationService.js';
+import cacheService from '../services/cacheService.js';
 
 // Password Strength Validator
 export const validatePasswordStrength = (password) => {
@@ -609,6 +610,16 @@ export const updateProfile = async (req, res) => {
           },
         }
       ).catch(() => {});
+    }
+
+    if (user.brokerageId) {
+      await Promise.all([
+        cacheService.del(cacheService.generateKey(user.brokerageId, 'team', 'advisors')),
+        cacheService.del(cacheService.generateKey(user.brokerageId, 'dash', 'stats')),
+        cacheService.invalidatePattern(cacheService.generateKey(user.brokerageId, 'leads', '*')),
+        cacheService.invalidatePattern(cacheService.generateKey(user.brokerageId, 'client', '*')),
+        cacheService.invalidatePattern(cacheService.generateKey(user.brokerageId, 'client:portal', '*')),
+      ]).catch(() => {});
     }
 
     const workspaces = await user.getWorkspaces();

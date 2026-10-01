@@ -11,8 +11,16 @@ class CacheService {
    * Format: `cache:t:<brokerageId>:<domain>:<identifier>`
    */
   generateKey(brokerageId, domain, identifier = 'default') {
-    const tenantPart = brokerageId ? `t:${brokerageId}` : 'global';
-    const idPart = typeof identifier === 'object' ? JSON.stringify(identifier) : String(identifier);
+    let rawId = '';
+    if (brokerageId) {
+      if (typeof brokerageId === 'object' && brokerageId !== null) {
+        rawId = (brokerageId._id || brokerageId.id || brokerageId).toString();
+      } else {
+        rawId = String(brokerageId);
+      }
+    }
+    const tenantPart = rawId ? `t:${rawId}` : 'global';
+    const idPart = typeof identifier === 'object' && identifier !== null ? JSON.stringify(identifier) : String(identifier);
     return `cache:${tenantPart}:${domain}:${idPart}`;
   }
 

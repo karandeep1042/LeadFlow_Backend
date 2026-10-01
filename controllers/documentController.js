@@ -15,14 +15,9 @@ export const invalidateDocumentCaches = async (brokerageId, leadId = null, clien
       cacheService.invalidatePattern(cacheService.generateKey(brokerageId, 'docs', '*')),
       cacheService.invalidatePattern(cacheService.generateKey(brokerageId, 'leads', '*')),
       cacheService.invalidatePattern(cacheService.generateKey(brokerageId, 'client', '*')),
+      cacheService.invalidatePattern(cacheService.generateKey(brokerageId, 'client:portal', '*')),
       cacheService.del(cacheService.generateKey(brokerageId, 'dash', 'stats')),
     ];
-    if (clientId) {
-      promises.push(cacheService.del(cacheService.generateKey(brokerageId, 'client:portal', clientId)));
-    }
-    if (leadId) {
-      promises.push(cacheService.del(cacheService.generateKey(brokerageId, 'client:portal', leadId)));
-    }
     await Promise.all(promises);
   } catch (err) {
     console.warn('[Cache] Error invalidating document caches:', err.message);

@@ -53,6 +53,8 @@ export const createSource = async (req, res) => {
 
     const baseUrl = `${req.protocol}://${req.get('host')}`;
 
+    await cacheService.del(cacheService.generateKey(req.user?.brokerageId, 'dash', 'stats')).catch(() => {});
+
     return res.status(201).json({
       success: true,
       message: 'Webhook source created successfully',
@@ -83,6 +85,7 @@ export const updateSource = async (req, res) => {
     );
 
     if (!source) return res.status(404).json({ success: false, message: 'Ingestion source not found' });
+    await cacheService.del(cacheService.generateKey(req.user?.brokerageId, 'dash', 'stats')).catch(() => {});
     return res.status(200).json({ success: true, message: 'Source updated successfully', data: source });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
@@ -94,6 +97,7 @@ export const deleteSource = async (req, res) => {
     const { sourceId } = req.params;
     const source = await IngestionSource.findOneAndDelete({ _id: sourceId, ...req.tenantFilter });
     if (!source) return res.status(404).json({ success: false, message: 'Ingestion source not found' });
+    await cacheService.del(cacheService.generateKey(req.user?.brokerageId, 'dash', 'stats')).catch(() => {});
     return res.status(200).json({ success: true, message: 'Source deleted', data: { sourceId } });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
@@ -193,6 +197,8 @@ export const updateSourceStatus = async (req, res) => {
       { status },
       { new: true }
     );
+    if (!source) return res.status(404).json({ success: false, message: 'Ingestion source not found' });
+    await cacheService.del(cacheService.generateKey(req.user?.brokerageId, 'dash', 'stats')).catch(() => {});
     return res.status(200).json({ success: true, data: source });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
