@@ -1,5 +1,6 @@
 import User from '../models/User.js';
 import Lead from '../models/Lead.js';
+import Task from '../models/Task.js';
 import Brokerage from '../models/Brokerage.js';
 import { sendAdvisorInvitationEmail } from '../utils/emailService.js';
 import cacheService from '../services/cacheService.js';
@@ -276,6 +277,206 @@ export const updateAdvisorStatus = async (req, res) => {
       },
     });
   } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+
+/**
+ * Fetch all leads currently assigned to a specific advisor in the brokerage
+ */
+export const getAdvisorLeads = async (req, res) => {
+  try {
+    const { advisorId } = req.params;
+    const brokerageId = req.user.brokerageId;
+
+    const leads = await Lead.find({
+      brokerageId,
+      assignedAdvisorId: advisorId,
+    })
+      .select('firstName lastName email phone stage loanAmount purchasePrice city createdAt updatedAt')
+      .sort({ updatedAt: -1 })
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        leads,
+        totalCount: leads.length,
+      },
+    });
+  } catch (error) {
+    console.error('Error fetching advisor leads:', error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * Delete an advisor account from the brokerage roster.
+ * If the advisor is currently managing any leads, leads must be reassigned to another advisor first.
+ */
+export const deleteAdvisor = async (req, res) => {
+  try {
+    const { advisorId } = req.params;
+    const brokerageId = req.user.brokerageId;
+    const reassignToAdvisorId = req.body?.reassignToAdvisorId || req.query?.reassignToAdvisorId;
+
+    // 1. Prevent deleting self
+    if (
+      req.user &&
+      (req.user._id?.toString() === advisorId || req.user.id?.toString() === advisorId)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: 'You cannot delete your own account from the team roster.',
+      });
+    }
+
+    // 2. Find advisor
+    const advisor = await User.findById(advisorId);
+    if (!advisor) {
+      return res.status(404).json({ success: false, message: 'Advisor not found' });
+    }
+
+    // 3. Verify brokerage ownership
+    const isDirect =
+      advisor.brokerageId && advisor.brokerageId.toString() === brokerageId.toString();
+    const membershipIndex = advisor.memberships
+      ? advisor.memberships.findIndex(
+          (m) => m.brokerageId && m.brokerageId.toString() === brokerageId.toString()
+        )
+      : -1;
+
+    if (!isDirect && membershipIndex === -1) {
+      return res.status(404).json({
+        success: false,
+        message: 'Advisor does not belong to your brokerage.',
+      });
+    }
+
+    // 4. Check for active/assigned leads
+    const assignedLeads = await Lead.find({
+      brokerageId,
+      assignedAdvisorId: advisorId,
+    });
+
+    let reassignedAdvisorName = '';
+
+    if (assignedLeads.length > 0) {
+      if (!reassignToAdvisorId) {
+        return res.status(400).json({
+          success: false,
+          hasLeads: true,
+          leadCount: assignedLeads.length,
+          leads: assignedLeads.map((l) => ({
+            _id: l._id,
+            firstName: l.firstName,
+            lastName: l.lastName,
+            email: l.email,
+            loanAmount: l.loanAmount,
+            stage: l.stage,
+          })),
+          message: `This advisor is currently managing ${assignedLeads.length} lead(s). Please select a replacement advisor to reassign these cases before deletion.`,
+        });
+      }
+
+      if (reassignToAdvisorId.toString() === advisorId.toString()) {
+        return res.status(400).json({
+          success: false,
+          message: 'Cannot reassign leads to the advisor being deleted.',
+        });
+      }
+
+      // Verify target advisor
+      const targetAdvisor = await User.findOne({
+        _id: reassignToAdvisorId,
+        $or: [
+          { brokerageId },
+          { memberships: { $elemMatch: { brokerageId } } },
+        ],
+      });
+
+      if (!targetAdvisor) {
+        return res.status(404).json({
+          success: false,
+          message: 'Target advisor for reassignment was not found in your brokerage.',
+        });
+      }
+
+      reassignedAdvisorName = targetAdvisor.name;
+      const leadIds = assignedLeads.map((l) => l._id);
+
+      // Reassign all leads to the target advisor
+      await Lead.updateMany(
+        { _id: { $in: leadIds }, brokerageId },
+        {
+          $set: { assignedAdvisorId: targetAdvisor._id },
+          $push: {
+            notesList: {
+              author: req.user.name || 'Brokerage Admin',
+              text: `Advisor reallocated to ${targetAdvisor.name} due to account removal of ${advisor.name}.`,
+              createdAt: new Date(),
+            },
+          },
+        }
+      );
+
+      // Transfer open/pending tasks for these leads to the target advisor
+      await Task.updateMany(
+        { leadId: { $in: leadIds }, brokerageId, isCompleted: false },
+        { assignedAdvisorId: targetAdvisor._id }
+      );
+    }
+
+    // 5. Remove membership or delete User
+    if (membershipIndex !== -1) {
+      advisor.memberships.splice(membershipIndex, 1);
+    }
+
+    const remainingMemberships = (advisor.memberships || []).filter(
+      (m) => m.brokerageId && m.brokerageId.toString() !== brokerageId.toString()
+    );
+
+    const isPrimarySame =
+      advisor.brokerageId && advisor.brokerageId.toString() === brokerageId.toString();
+
+    if (remainingMemberships.length === 0 && isPrimarySame) {
+      // User only existed for this brokerage, delete completely
+      await User.findByIdAndDelete(advisorId);
+    } else {
+      // User belongs to other workspaces, update memberships and fallback primary brokerage
+      advisor.memberships = remainingMemberships;
+      if (isPrimarySame) {
+        if (remainingMemberships.length > 0) {
+          advisor.brokerageId = remainingMemberships[0].brokerageId;
+          advisor.role = remainingMemberships[0].role;
+        } else {
+          advisor.brokerageId = null;
+        }
+      }
+      await advisor.save();
+    }
+
+    // 6. Invalidate Team, Dashboard, and Client Caches
+    await Promise.all([
+      cacheService.del(cacheService.generateKey(brokerageId, 'team', 'advisors')),
+      cacheService.del(cacheService.generateKey(brokerageId, 'dash', 'stats')),
+      cacheService.del(cacheService.generateKey(brokerageId, 'clients', 'all')),
+    ]).catch(() => {});
+
+    return res.status(200).json({
+      success: true,
+      message: `Advisor account "${advisor.name}" has been permanently deleted${
+        assignedLeads.length > 0 ? ` and ${assignedLeads.length} lead(s) were reassigned to ${reassignedAdvisorName}` : ''
+      }.`,
+      data: {
+        deletedAdvisorId: advisorId,
+        reassignedCount: assignedLeads.length,
+        reassignedToAdvisorId: reassignToAdvisorId || null,
+      },
+    });
+  } catch (error) {
+    console.error('Error deleting advisor:', error);
     return res.status(500).json({ success: false, message: error.message });
   }
 };

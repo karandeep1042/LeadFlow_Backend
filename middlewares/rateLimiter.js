@@ -1,6 +1,6 @@
 import { rateLimit } from 'express-rate-limit';
 import { RedisStore } from 'rate-limit-redis';
-import { getRedisClient, isRedisReady } from '../utils/redis.js';
+import { getRedisClient } from '../utils/redis.js';
 
 /**
  * Creates a rate limiter instance backed by Redis if available, or in-memory store as fallback.
@@ -14,20 +14,24 @@ export const createRateLimiter = ({
   skipFailedRequests = false,
   keyGenerator,
 } = {}) => {
+  const client = getRedisClient();
   let store;
-  try {
-    store = new RedisStore({
-      sendCommand: async (...args) => {
-        const client = getRedisClient();
-        if (!client || !isRedisReady()) {
-          throw new Error('Redis connection is not active');
-        }
-        return client.call(...args);
-      },
-      prefix: `rl:${prefix}:`,
-    });
-  } catch (err) {
-    console.warn(`[RateLimiter] Error initializing RedisStore for prefix "${prefix}", falling back to memory:`, err.message);
+
+  if (client) {
+    try {
+      store = new RedisStore({
+        sendCommand: async (...args) => {
+          if (!client) {
+            throw new Error('Redis client not configured');
+          }
+          return client.call(...args);
+        },
+        prefix: `rl:${prefix}:`,
+      });
+    } catch (err) {
+      console.warn(`[RateLimiter] Error initializing RedisStore for prefix "${prefix}", falling back to memory:`, err.message);
+      store = undefined;
+    }
   }
 
   return rateLimit({

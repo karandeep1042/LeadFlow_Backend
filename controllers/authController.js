@@ -3,6 +3,7 @@ import Brokerage from '../models/Brokerage.js';
 import EmailVerification from '../models/EmailVerification.js';
 import EmailTemplate from '../models/EmailTemplate.js';
 import StageTrigger from '../models/StageTrigger.js';
+import Lead from '../models/Lead.js';
 import { DEFAULT_STAGE_CONFIGS, DEFAULT_ACCOUNT_TEMPLATES } from '../utils/defaultAutomations.js';
 import { seedDefaultIngestionSources } from '../utils/defaultIngestionSources.js';
 import {
@@ -537,21 +538,45 @@ export const getCurrentUser = async (req, res) => {
 export const updateProfile = async (req, res) => {
   try {
     const { name, email, currentPassword, newPassword, phone } = req.body;
-    const user = await User.findById(req.user._id).select('+password');
+    const userId = req.user?._id || req.user?.id;
+    const user = await User.findById(userId).select('+password');
     if (!user) return res.status(404).json({ success: false, message: 'User not found' });
 
-    if (name) user.name = name.trim();
-    if (phone !== undefined) user.phone = phone.trim();
+    if (name && name.trim()) {
+      user.name = name.trim();
+    }
+    if (phone !== undefined) {
+      user.phone = phone.trim();
+    }
 
-    if (email && email.toLowerCase() !== user.email) {
-      const existing = await User.findOne({ email: email.toLowerCase().trim() });
-      if (existing) return res.status(400).json({ success: false, message: 'Email is already taken' });
-      user.email = email.toLowerCase().trim();
+    if (email) {
+      const normalizedEmail = email.toLowerCase().trim();
+      if (normalizedEmail !== user.email) {
+        const existing = await User.findOne({ email: normalizedEmail, _id: { $ne: user._id } });
+        if (existing) {
+          return res.status(400).json({ success: false, message: 'This email is already in use by another account.' });
+        }
+
+        // Verify that the email was verified using the verification code flow
+        const emailVerification = await EmailVerification.findOne({
+          email: normalizedEmail,
+          isVerified: true,
+        });
+        if (!emailVerification) {
+          return res.status(400).json({
+            success: false,
+            message: 'Please verify your new email address with the verification code before saving changes.',
+          });
+        }
+
+        user.email = normalizedEmail;
+        await EmailVerification.deleteMany({ email: normalizedEmail }).catch(() => {});
+      }
     }
 
     if (newPassword) {
       if (!currentPassword) {
-        return res.status(400).json({ success: false, message: 'Current password is required to set new password' });
+        return res.status(400).json({ success: false, message: 'Current password is required to change password' });
       }
       const isMatch = await user.comparePassword(currentPassword);
       if (!isMatch) {
@@ -567,12 +592,55 @@ export const updateProfile = async (req, res) => {
     }
 
     await user.save();
+
+    // If client has associated Lead or profile data, keep phone/email/name synchronized
+    if (user.role === 'client') {
+      const nameParts = (user.name || '').trim().split(' ');
+      const firstName = nameParts[0] || '';
+      const lastName = nameParts.slice(1).join(' ') || '';
+      await Lead.updateMany(
+        { $or: [{ clientId: user._id }, { email: user.email }] },
+        {
+          $set: {
+            email: user.email,
+            phone: user.phone || '',
+            firstName,
+            lastName,
+          },
+        }
+      ).catch(() => {});
+    }
+
+    const workspaces = await user.getWorkspaces();
+
     return res.status(200).json({
       success: true,
       message: 'Profile updated successfully',
-      data: { id: user._id, name: user.name, email: user.email, role: user.role, phone: user.phone },
+      data: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+        role: req.userRole || user.role,
+        brokerageId: req.brokerageId || user.brokerageId,
+        brokerage: user.brokerageId,
+        workspaces,
+        mustChangePassword: false,
+      },
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+        role: req.userRole || user.role,
+        brokerageId: req.brokerageId || user.brokerageId,
+        brokerage: user.brokerageId,
+        workspaces,
+        mustChangePassword: false,
+      },
     });
   } catch (error) {
+    console.error('Update profile error:', error);
     return res.status(500).json({ success: false, message: 'Failed to update profile' });
   }
 };
@@ -814,7 +882,7 @@ export const sendSignupVerificationCode = async (req, res) => {
     if (!email || !email.trim()) {
       return res.status(400).json({
         success: false,
-        message: 'Business email is required.',
+        message: 'Email address is required.',
       });
     }
 
@@ -823,7 +891,7 @@ export const sendSignupVerificationCode = async (req, res) => {
     if (!emailRegex.test(normalizedEmail)) {
       return res.status(400).json({
         success: false,
-        message: 'Please provide a valid business email address.',
+        message: 'Please provide a valid email address.',
       });
     }
 
@@ -832,7 +900,7 @@ export const sendSignupVerificationCode = async (req, res) => {
     if (existingUser) {
       return res.status(400).json({
         success: false,
-        message: 'An account with this email already exists. Please sign in or use another email.',
+        message: 'An account with this email address already exists. Please use another email address.',
       });
     }
 
@@ -850,12 +918,12 @@ export const sendSignupVerificationCode = async (req, res) => {
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
 
-    console.log(`[LeadFlow Auth] Sign up verification code for ${normalizedEmail}: ${verificationCode}`);
+    console.log(`[LeadFlow Auth] Verification code for ${normalizedEmail}: ${verificationCode}`);
 
     // Send verification email
     const emailResult = await sendSignupVerificationEmail({
       to: normalizedEmail,
-      userName: name || 'Valued Broker',
+      userName: name || 'Valued User',
       verificationCode,
       expiresInMinutes: 15,
     });
