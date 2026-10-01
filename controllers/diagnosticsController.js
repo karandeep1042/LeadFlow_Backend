@@ -4,6 +4,13 @@ import { isRedisReady, testRedisConnection, initRedisClient, getCurrentRedisUrl,
 import { testDatabaseConnection, connectDB, getCurrentMongoUri, parseMongoUriInfo, maskMongoUri } from '../utils/db.js';
 import { testSmtpConfig, setTransporterConfig, getCurrentSmtpConfig } from '../utils/emailService.js';
 import { updateEnvVariable } from '../utils/envHelper.js';
+import {
+  getEmailQueueStats,
+  flushEmailQueue,
+  retryFailedEmailJob,
+  retryAllFailedJobs,
+  deleteEmailQueueJob,
+} from '../services/emailQueueService.js';
 
 /**
  * 1. Get Platform Infrastructure Health & Sanitized Configs
@@ -87,6 +94,9 @@ export const getPlatformHealth = async (req, res) => {
     const smtpConfig = getCurrentSmtpConfig();
     const smtpHealth = await testSmtpConfig();
 
+    // 4. Email Queue & DLQ Health
+    const emailQueueStats = await getEmailQueueStats({ limit: 10 });
+
     // Sanitized Configs
     const maskedMongoUri = maskMongoUri(mongoUri);
     const maskedRedisUrl = redisUrl ? redisUrl.replace(/:\/\/([^:]+):([^@]+)@/, '://$1:••••••••@') : '';
@@ -124,6 +134,11 @@ export const getPlatformHealth = async (req, res) => {
           secure: smtpConfig.secure,
           user: smtpConfig.user,
           hasPass: smtpConfig.hasPass,
+        },
+        emailQueue: {
+          status: (emailQueueStats?.counts?.failed || 0) > 0 ? 'dlq_alert' : 'healthy',
+          counts: emailQueueStats?.counts || { pending: 0, processing: 0, sent: 0, failed: 0, total: 0 },
+          recentItems: emailQueueStats?.items || [],
         },
       },
     });
@@ -300,6 +315,89 @@ export const updatePlatformServiceCredentials = async (req, res) => {
     return res.status(400).json({ success: false, message: `Invalid service type "${type}"` });
   } catch (error) {
     console.error('updatePlatformServiceCredentials error:', error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * 4. Get Email Queue Items & DLQ Metrics
+ */
+export const getEmailQueue = async (req, res) => {
+  try {
+    const { limit = 50, status } = req.query;
+    const stats = await getEmailQueueStats({ limit: Number(limit) || 50, status });
+    return res.status(200).json({
+      success: true,
+      data: stats,
+    });
+  } catch (error) {
+    console.error('getEmailQueue error:', error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * 5. Manually Trigger Email Queue Worker Flush
+ */
+export const flushEmailQueueHandler = async (req, res) => {
+  try {
+    const result = await flushEmailQueue();
+    const stats = await getEmailQueueStats({ limit: 50 });
+    return res.status(200).json({
+      success: true,
+      message: result.message || 'Email queue flush completed.',
+      result,
+      data: stats,
+    });
+  } catch (error) {
+    console.error('flushEmailQueueHandler error:', error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * 6. Retry a specific Failed / Pending Email Job
+ */
+export const retryEmailJobHandler = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await retryFailedEmailJob(id);
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
+    return res.status(200).json(result);
+  } catch (error) {
+    console.error('retryEmailJobHandler error:', error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * 7. Bulk Retry All Dead Letter Queue (DLQ) Failed Emails
+ */
+export const retryAllFailedEmailsHandler = async (req, res) => {
+  try {
+    const result = await retryAllFailedJobs();
+    return res.status(200).json(result);
+  } catch (error) {
+    console.error('retryAllFailedEmailsHandler error:', error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * 8. Delete an Email Job from Queue
+ */
+export const deleteEmailJobHandler = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await deleteEmailQueueJob(id);
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
+    return res.status(200).json(result);
+  } catch (error) {
+    console.error('deleteEmailJobHandler error:', error);
     return res.status(500).json({ success: false, message: error.message });
   }
 };

@@ -4,6 +4,7 @@ import EmailTemplate from '../models/EmailTemplate.js';
 import PlatformEmailTemplate from '../models/PlatformEmailTemplate.js';
 import StageTrigger from '../models/StageTrigger.js';
 import Brokerage from '../models/Brokerage.js';
+import { enqueueEmail } from '../services/emailQueueService.js';
 import { DEFAULT_STAGE_CONFIGS, DEFAULT_ACCOUNT_TEMPLATES } from './defaultAutomations.js';
 import { DEFAULT_PLATFORM_TEMPLATES } from './defaultPlatformTemplates.js';
 import { getStageDisplayName } from './constants.js';
@@ -163,6 +164,47 @@ const getTransporter = async () => {
   }
 
   return transporterPromise;
+};
+
+export const getRawTransporter = getTransporter;
+
+/**
+ * Dispatches email immediately or automatically enqueues it if the SMTP provider fails/times out
+ */
+export const dispatchOrEnqueueMail = async ({
+  mailOptions,
+  brokerageId = null,
+  templateType = 'general',
+}) => {
+  try {
+    const transporter = await getTransporter();
+    const info = await transporter.sendMail(mailOptions);
+    const previewUrl = nodemailer.getTestMessageUrl(info);
+    if (previewUrl) {
+      console.log(`[Email Sent] Email to "${mailOptions.to}" succeeded. Preview: ${previewUrl}`);
+    } else {
+      console.log(`[Email Sent] Email to "${mailOptions.to}" succeeded. MessageId: ${info?.messageId}`);
+    }
+    return { success: true, messageId: info?.messageId, previewUrl: previewUrl || null, queued: false };
+  } catch (error) {
+    console.warn(`[Email Service] Direct send failed for "${mailOptions.to}" (${error.message}). Auto-enqueuing for retry...`);
+    const queueItem = await enqueueEmail({
+      to: mailOptions.to,
+      subject: mailOptions.subject,
+      html: mailOptions.html,
+      text: mailOptions.text,
+      from: mailOptions.from,
+      brokerageId,
+      templateType,
+      initialError: error.message,
+    });
+    return {
+      success: true,
+      queued: true,
+      queueId: queueItem?._id,
+      error: error.message,
+    };
+  }
 };
 
 /**
@@ -360,14 +402,11 @@ export const sendClientInvitationEmail = async ({
       html: htmlContent,
     };
 
-    const info = await transporter.sendMail(mailOptions);
-    const previewUrl = nodemailer.getTestMessageUrl(info);
-    if (previewUrl) {
-      console.log(`[Email Sent] Client portal invitation sent to ${to}. Preview: ${previewUrl}`);
-    } else {
-      console.log(`[Email Sent] Client portal invitation sent to ${to}. MessageId: ${info?.messageId}`);
-    }
-    return { success: true, messageId: info?.messageId, previewUrl: previewUrl || null };
+    return await dispatchOrEnqueueMail({
+      mailOptions,
+      brokerageId,
+      templateType: 'client_invitation',
+    });
   } catch (error) {
     console.error('[Client Invitation Email Error]', error);
     return { success: false, error: error.message };
@@ -433,19 +472,11 @@ export const sendAdvisorInvitationEmail = async ({
       html: htmlContent,
     };
 
-    const info = await transporter.sendMail(mailOptions);
-    const previewUrl = nodemailer.getTestMessageUrl(info);
-    if (previewUrl) {
-      console.log(`[Email Sent] Advisor invitation sent to ${to}. Preview URL: ${previewUrl}`);
-    } else {
-      console.log(`[Email Sent] Advisor invitation sent to ${to}. Message ID: ${info.messageId}`);
-    }
-
-    return {
-      success: true,
-      messageId: info.messageId,
-      previewUrl: previewUrl || null,
-    };
+    return await dispatchOrEnqueueMail({
+      mailOptions,
+      brokerageId: null,
+      templateType: 'advisor_invitation',
+    });
   } catch (error) {
     console.error('[Email Service Error]', error);
     return {
@@ -534,12 +565,11 @@ export const sendLeadAdvisorAssignedEmail = async ({
       html: htmlContent,
     };
 
-    const info = await transporter.sendMail(mailOptions);
-    const previewUrl = nodemailer.getTestMessageUrl(info);
-    if (previewUrl) {
-      console.log(`[Email Sent] Advisor notification sent to ${lead.email}. Preview: ${previewUrl}`);
-    }
-    return { success: true, messageId: info.messageId, previewUrl: previewUrl || null };
+    return await dispatchOrEnqueueMail({
+      mailOptions,
+      brokerageId: effectiveBrokerageId,
+      templateType: 'advisor_assigned',
+    });
   } catch (error) {
     console.error('[Advisor Assignment Email Error]', error);
     return { success: false, error: error.message };
@@ -683,14 +713,11 @@ export const sendClientAccountStatusEmail = async ({
       html: htmlContent,
     };
 
-    const info = await transporter.sendMail(mailOptions);
-    const previewUrl = nodemailer.getTestMessageUrl(info);
-    if (previewUrl) {
-      console.log(`[Email Sent] Client status email sent to ${to}. Preview: ${previewUrl}`);
-    } else {
-      console.log(`[Email Sent] Client status email sent to ${to}. MessageId: ${info?.messageId}`);
-    }
-    return { success: true, messageId: info.messageId, previewUrl: previewUrl || null };
+    return await dispatchOrEnqueueMail({
+      mailOptions,
+      brokerageId,
+      templateType: isSuspended ? 'account_suspended' : 'account_activated',
+    });
   } catch (error) {
     console.error('[Client Account Status Email Error]', error);
     return { success: false, error: error.message };
@@ -792,9 +819,11 @@ export const sendStageMilestoneEmail = async ({
       html: htmlContent,
     };
 
-    const info = await transporter.sendMail(mailOptions);
-    console.log(`[Email Sent] Stage milestone email sent to ${to}. MessageId: ${info?.messageId}`);
-    return { success: true, messageId: info?.messageId };
+    return await dispatchOrEnqueueMail({
+      mailOptions,
+      brokerageId,
+      templateType: 'stage_milestone',
+    });
   } catch (error) {
     console.error('[Stage Milestone Email Error]', error);
     return { success: false, error: error.message };
@@ -899,9 +928,11 @@ export const sendDocumentRevisionEmail = async ({
       html: htmlContent,
     };
 
-    const info = await transporter.sendMail(mailOptions);
-    console.log(`[Email Sent] Document revision email sent to ${to}. MessageId: ${info?.messageId}`);
-    return { success: true, messageId: info?.messageId };
+    return await dispatchOrEnqueueMail({
+      mailOptions,
+      brokerageId,
+      templateType: 'doc_revision',
+    });
   } catch (error) {
     console.error('[Document Revision Email Error]', error);
     return { success: false, error: error.message };
@@ -992,19 +1023,11 @@ export const sendPasswordResetEmail = async ({
       html: htmlContent,
     };
 
-    const info = await transporter.sendMail(mailOptions);
-    const previewUrl = nodemailer.getTestMessageUrl(info);
-    if (previewUrl) {
-      console.log(`[Email Sent] Password reset verification email sent to ${to}. Preview: ${previewUrl}`);
-    } else {
-      console.log(`[Email Sent] Password reset verification email sent to ${to}. MessageId: ${info?.messageId}`);
-    }
-
-    return {
-      success: true,
-      messageId: info.messageId,
-      previewUrl: previewUrl || null,
-    };
+    return await dispatchOrEnqueueMail({
+      mailOptions,
+      brokerageId,
+      templateType: 'password_reset_code',
+    });
   } catch (error) {
     console.error('[Password Reset Email Error]', error);
     return {
@@ -1086,11 +1109,11 @@ export const sendPasswordResetConfirmationEmail = async ({
       html: htmlContent,
     };
 
-    const info = await transporter.sendMail(mailOptions);
-    return {
-      success: true,
-      messageId: info.messageId,
-    };
+    return await dispatchOrEnqueueMail({
+      mailOptions,
+      brokerageId,
+      templateType: 'password_reset_confirmed',
+    });
   } catch (error) {
     console.error('[Password Reset Confirmation Email Error]', error);
     return {
@@ -1153,19 +1176,11 @@ export const sendSignupVerificationEmail = async ({
       html: htmlContent,
     };
 
-    const info = await transporter.sendMail(mailOptions);
-    const previewUrl = nodemailer.getTestMessageUrl(info);
-    if (previewUrl) {
-      console.log(`[Email Sent] Sign up verification email sent to ${to}. Preview: ${previewUrl}`);
-    } else {
-      console.log(`[Email Sent] Sign up verification email sent to ${to}. MessageId: ${info?.messageId}`);
-    }
-
-    return {
-      success: true,
-      messageId: info?.messageId,
-      previewUrl: previewUrl || null,
-    };
+    return await dispatchOrEnqueueMail({
+      mailOptions,
+      brokerageId: null,
+      templateType: 'signup_verification',
+    });
   } catch (error) {
     console.error('[Sign Up Verification Email Error]', error);
     return {
@@ -1265,8 +1280,11 @@ export const sendBrokerageWelcomeEmail = async ({
       html: htmlContent,
     };
 
-    const info = await transporter.sendMail(mailOptions);
-    return { success: true, messageId: info?.messageId };
+    return await dispatchOrEnqueueMail({
+      mailOptions,
+      brokerageId: null,
+      templateType: 'platform_org_welcome',
+    });
   } catch (error) {
     console.error('[Brokerage Welcome Email Error]', error);
     return { success: false, error: error.message };
@@ -1326,8 +1344,11 @@ export const sendBrokerageSuspendedEmail = async ({
       html: htmlContent,
     };
 
-    const info = await transporter.sendMail(mailOptions);
-    return { success: true, messageId: info?.messageId };
+    return await dispatchOrEnqueueMail({
+      mailOptions,
+      brokerageId: null,
+      templateType: 'platform_org_suspended',
+    });
   } catch (error) {
     console.error('[Brokerage Suspended Email Error]', error);
     return { success: false, error: error.message };
@@ -1391,8 +1412,11 @@ export const sendBrokerageReactivatedEmail = async ({
       html: htmlContent,
     };
 
-    const info = await transporter.sendMail(mailOptions);
-    return { success: true, messageId: info?.messageId };
+    return await dispatchOrEnqueueMail({
+      mailOptions,
+      brokerageId: null,
+      templateType: 'platform_org_reactivated',
+    });
   } catch (error) {
     console.error('[Brokerage Reactivated Email Error]', error);
     return { success: false, error: error.message };

@@ -9,6 +9,7 @@ import { connectDB } from './utils/db.js';
 import { seedDefaultDemoAccounts } from './utils/seedData.js';
 import { initSocket } from './utils/socket.js';
 import { initKeepAliveCron } from './utils/keepAliveCron.js';
+import { initEmailQueueWorker } from './services/emailQueueService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -113,6 +114,9 @@ const startServer = async () => {
 
     // Start 30s Keep-Alive Cronjob to prevent Render free-tier instance from sleeping
     initKeepAliveCron(PORT);
+
+    // Initialize 30s Email Queue Worker for resilient background retry handling
+    initEmailQueueWorker(30000);
   });
 };
 

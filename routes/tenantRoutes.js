@@ -21,6 +21,11 @@ import {
   getPlatformHealth,
   testPlatformService,
   updatePlatformServiceCredentials,
+  getEmailQueue,
+  flushEmailQueueHandler,
+  retryEmailJobHandler,
+  retryAllFailedEmailsHandler,
+  deleteEmailJobHandler,
 } from '../controllers/diagnosticsController.js';
 import { authenticate, authorize } from '../middlewares/authMiddleware.js';
 import { ROLES } from '../utils/constants.js';
@@ -52,6 +57,11 @@ router.get('/diagnostics/health', getPlatformHealth);
 router.post('/diagnostics/test/:type', testPlatformService);
 router.put('/diagnostics/credentials/:type', updatePlatformServiceCredentials);
 router.get('/diagnostics/smtp', testSmtpConnection);
+router.get('/diagnostics/email-queue', getEmailQueue);
+router.post('/diagnostics/email-queue/flush', flushEmailQueueHandler);
+router.post('/diagnostics/email-queue/retry-all', retryAllFailedEmailsHandler);
+router.post('/diagnostics/email-queue/retry/:id', retryEmailJobHandler);
+router.delete('/diagnostics/email-queue/:id', deleteEmailJobHandler);
 router.put('/profile', updateSuperAdminProfile);
 router.put('/password', updateSuperAdminPassword);
 
