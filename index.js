@@ -8,6 +8,7 @@ import { fileURLToPath } from 'url';
 import { connectDB } from './utils/db.js';
 import { seedDefaultDemoAccounts } from './utils/seedData.js';
 import { initSocket } from './utils/socket.js';
+import { initKeepAliveCron } from './utils/keepAliveCron.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -51,12 +52,14 @@ app.use('/uploads', express.static(uploadsDir));
 // Initialize Socket.IO Server attached to HTTP server
 initSocket(server, corsOptions);
 
-// Health Check Endpoint (not rate-limited)
-app.get('/api/health', (req, res) => {
+// Health Check Endpoint (not rate-limited, accessible via /health and /api/health)
+app.get(['/health', '/api/health'], (req, res) => {
   res.status(200).json({
     status: 'healthy',
+    uptime: process.uptime(),
     timestamp: new Date().toISOString(),
     service: 'LeadFlow API',
+    environment: process.env.NODE_ENV || 'development',
     realtime: 'Socket.IO Enabled',
   });
 });
@@ -107,6 +110,9 @@ const startServer = async () => {
     console.log(`[Auth] Endpoints active at /api/auth/*`);
     console.log(`[RBAC] Role-Based Authorization active across all routes`);
     console.log(`==========================================`);
+
+    // Start 30s Keep-Alive Cronjob to prevent Render free-tier instance from sleeping
+    initKeepAliveCron(PORT);
   });
 };
 
