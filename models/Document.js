@@ -33,6 +33,7 @@ const DocumentSchema = new mongoose.Schema(
     fileUrl: { type: String, required: true },
     fileSize: { type: Number, default: 0 },
     mimeType: { type: String, default: 'application/pdf' },
+    cloudinaryPublicId: { type: String, default: null },
     status: {
       type: String,
       enum: ['pending', 'processing', 'verified', 'rejected'],

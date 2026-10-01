@@ -5,24 +5,37 @@ const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'leadflow_refresh_s
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '15m';
 const JWT_REFRESH_EXPIRES_IN = process.env.JWT_REFRESH_EXPIRES_IN || '7d';
 
-export const generateAccessToken = (user) => {
+export const generateAccessToken = (user, scopedContext = {}) => {
+  const role = scopedContext.role || user.role;
+  const brokerageId =
+    scopedContext.brokerageId !== undefined
+      ? scopedContext.brokerageId
+      : user.brokerageId?._id || user.brokerageId || null;
+
   return jwt.sign(
     {
       id: user._id || user.id,
       email: user.email,
-      role: user.role,
-      brokerageId: user.brokerageId,
+      role,
+      brokerageId,
     },
     JWT_SECRET,
     { expiresIn: JWT_EXPIRES_IN }
   );
 };
 
-export const generateRefreshToken = (user) => {
+export const generateRefreshToken = (user, scopedContext = {}) => {
+  const role = scopedContext.role || user.role;
+  const brokerageId =
+    scopedContext.brokerageId !== undefined
+      ? scopedContext.brokerageId
+      : user.brokerageId?._id || user.brokerageId || null;
+
   return jwt.sign(
     {
       id: user._id || user.id,
-      role: user.role,
+      role,
+      brokerageId,
     },
     JWT_REFRESH_SECRET,
     { expiresIn: JWT_REFRESH_EXPIRES_IN }

@@ -7,6 +7,9 @@ import {
   convertToClient,
   resolveDuplicate,
   addNote,
+  declineLead,
+  archiveLead,
+  unarchiveLead,
 } from '../controllers/leadController.js';
 import { authenticate, authorize, enforceTenantScope } from '../middlewares/authMiddleware.js';
 import { STAFF_ROLES } from '../utils/constants.js';
@@ -23,6 +26,9 @@ router.patch('/:leadId/assign', assignAdvisor);
 router.post('/:leadId/convert', convertToClient);
 router.post('/:leadId/resolve-duplicate', resolveDuplicate);
 router.post('/:leadId/notes', addNote);
+router.post('/:leadId/decline', declineLead);
+router.post('/:leadId/archive', archiveLead);
+router.post('/:leadId/unarchive', unarchiveLead);
 
 export default router;
 

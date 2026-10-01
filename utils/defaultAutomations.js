@@ -60,3 +60,49 @@ export const DEFAULT_STAGE_CONFIGS = [
     taskDueHours: 72,
   },
 ];
+
+export const DEFAULT_ACCOUNT_TEMPLATES = [
+  {
+    name: 'Client Account Deactivated & Suspended',
+    subject: 'Important: Your {{brokerage_name}} Mortgage Portal Account has been Deactivated',
+    body: `Dear {{client_name}},\n\nYour client portal account at {{brokerage_name}} has been temporarily deactivated or suspended by our brokerage administration team.\n\nReason / Details: {{reason}}\n\nWhile your account is suspended, your access to upload documents or submit financing applications is temporarily restricted.\n\nIf you believe this is an error or would like to resume your mortgage application process, please contact your assigned advisor {{advisor_name}} or email our support desk at {{support_email}}.\n\nBest regards,\n{{brokerage_name}} Administration Team`,
+    description: 'Automated notification dispatched when a client account is suspended/deactivated by an admin',
+  },
+  {
+    name: 'Client Account Reactivated & Restored',
+    subject: 'Good News: Your {{brokerage_name}} Mortgage Portal Account is Active',
+    body: `Dear {{client_name}},\n\nWe are pleased to inform you that your client portal account at {{brokerage_name}} has been reactivated.\n\nYou can now log in securely using your credentials:\n\nLogin Portal: {{portal_link}}\nLogin Email: {{client_email}}\nTemporary Password: {{temporary_password}}\n\nAccess your mortgage journey roadmap, view loan status updates, and upload compliance documents for advisor {{advisor_name}}.\n\nWelcome back!\n\nWarm regards,\n{{brokerage_name}} Advisory Team`,
+    description: 'Automated notification dispatched when a client account is reactivated by an admin',
+  },
+  {
+    name: 'Client Portal Welcome & Onboarding',
+    subject: 'Access Your Secure Expat Mortgage Portal – {{brokerage_name}}',
+    body: `Dear {{client_name}},\n\nWelcome to {{brokerage_name}}! Your dedicated German mortgage portal is now active.\n\nYou can log in securely to manage your mortgage application roadmap and upload compliance documents:\n\nLogin Portal: {{portal_link}}\nLogin Email: {{client_email}}\nTemporary Password: {{temporary_password}}\n\nAssigned Mortgage Advisor: {{advisor_name}} ({{advisor_email}})\n\nBest regards,\n{{brokerage_name}} Team`,
+    description: 'Welcome and initial portal credentials for registered borrowers',
+  },
+  {
+    name: 'Document Verification Failed & Revision Request',
+    subject: 'Action Required: Document Revision for Your Mortgage Application – {{brokerage_name}}',
+    body: `Dear {{client_name}},\n\nYour mortgage advisor {{advisor_name}} or partner bank underwriter has reviewed your submitted documents and requested corrections / re-upload for your mortgage application.\n\nReason: {{reason}}\n\nPlease log in to your Document Vault at {{vault_link}} and submit updated compliant versions so we can finalize your bank submission.\n\nBest regards,\n{{advisor_name}} | {{brokerage_name}}`,
+    description: 'Dispatched when documents fail compliance/underwriting verification and require re-upload',
+  },
+  {
+    name: 'Mortgage Advisor Assigned Notice',
+    subject: 'Meet Your Dedicated Mortgage Advisor at {{brokerage_name}}',
+    body: `Dear {{client_name}},\n\nWe are pleased to inform you that {{advisor_name}} has been assigned as your dedicated Mortgage Advisor for your property financing in {{city}}.\n\nAdvisor Contact Information:\nEmail: {{advisor_email}}\nPhone: {{advisor_phone}}\n\nCurrent Application Stage: {{stage_label}}\n\nYou can track your application progress and message your advisor through your portal at {{portal_link}}.\n\nBest regards,\n{{brokerage_name}} Advisory Desk`,
+    description: 'Dispatched to the borrower when a mortgage advisor is assigned or reassigned to their lead file',
+  },
+  {
+    name: 'Password Reset Verification Code',
+    subject: 'Your Password Reset Verification Code: {{reset_code}} – {{brokerage_name}}',
+    body: `Dear {{user_name}},\n\nWe received a request to reset the password for your {{brokerage_name}} account ({{user_email}}).\n\nYour 6-digit verification code is:\n\n{{reset_code}}\n\nThis verification code is valid for 15 minutes. If you did not request this password reset, you can safely ignore this email and your password will remain unchanged.\n\nDirect Reset Link: {{reset_url}}\n\nBest regards,\n{{brokerage_name}} Security Desk`,
+    description: 'Automated verification code sent when a user requests a password reset',
+  },
+  {
+    name: 'Password Reset Confirmation Notice',
+    subject: 'Security Alert: Your Password Was Successfully Updated – {{brokerage_name}}',
+    body: `Dear {{user_name}},\n\nThis is a confirmation that the password for your {{brokerage_name}} account ({{user_email}}) was successfully updated.\n\nIf you did not make this change, please contact our security team immediately.\n\nSign In: {{login_url}}\n\nBest regards,\n{{brokerage_name}} Security Desk`,
+    description: 'Security confirmation dispatched after a user successfully resets their password',
+  },
+];
+
