@@ -16,6 +16,7 @@ import {
 import { emitToBrokerage, emitToPlatformAdmins } from '../utils/socket.js';
 import { validatePasswordStrength } from './authController.js';
 import { notifyBrokerageRegistered } from '../services/notificationService.js';
+import cacheService from '../services/cacheService.js';
 
 /**
  * 1. Get All Tenants with Enhanced Metrics and Filters
@@ -318,6 +319,12 @@ export const updateTenantStatus = async (req, res) => {
       banReason: brokerage.banReason,
     });
 
+    // Invalidate tenant dashboard cache
+    await Promise.all([
+      cacheService.del(cacheService.generateKey(tenantId, 'dash', 'stats')),
+      cacheService.del(cacheService.generateKey(tenantId, 'tenant', 'metrics')),
+    ]).catch(() => {});
+
     return res.status(200).json({
       success: true,
       message: `Brokerage has been ${status === 'suspended' ? 'suspended' : 'reactivated'} successfully.`,
@@ -348,6 +355,11 @@ export const updateTenantDetails = async (req, res) => {
     if (subdomain) brokerage.subdomain = subdomain.toLowerCase().trim().replace(/[^a-z0-9-]/g, '');
 
     await brokerage.save();
+
+    await Promise.all([
+      cacheService.del(cacheService.generateKey(tenantId, 'dash', 'stats')),
+      cacheService.del(cacheService.generateKey(tenantId, 'tenant', 'metrics')),
+    ]).catch(() => {});
 
     emitToPlatformAdmins('tenant:updated', brokerage);
 

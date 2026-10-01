@@ -16,16 +16,12 @@ export const invalidateLeadCaches = async (brokerageId, clientId = null) => {
   try {
     const promises = [
       cacheService.invalidatePattern(cacheService.generateKey(brokerageId, 'leads', '*')),
-      cacheService.del(cacheService.generateKey(brokerageId, 'dash', 'stats')),
       cacheService.invalidatePattern(cacheService.generateKey(brokerageId, 'client', '*')),
+      cacheService.invalidatePattern(cacheService.generateKey(brokerageId, 'client:portal', '*')),
       cacheService.invalidatePattern(cacheService.generateKey(brokerageId, 'tasks', '*')),
+      cacheService.del(cacheService.generateKey(brokerageId, 'dash', 'stats')),
+      cacheService.del(cacheService.generateKey(brokerageId, 'team', 'advisors')),
     ];
-    if (clientId) {
-      const cId = typeof clientId === 'object' && clientId !== null ? (clientId._id || clientId.id) : clientId;
-      if (cId) {
-        promises.push(cacheService.del(cacheService.generateKey(brokerageId, 'client:portal', cId)));
-      }
-    }
     await Promise.all(promises);
   } catch (err) {
     console.warn('[Cache] Invalidation error for leads:', err.message);

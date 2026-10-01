@@ -3,6 +3,7 @@ import Brokerage from '../models/Brokerage.js';
 import Lead from '../models/Lead.js';
 import { emitToBrokerage, emitToUser } from '../utils/socket.js';
 import { calculateLeadDocsSummary } from '../controllers/leadController.js';
+import { invalidateDocumentCaches } from '../controllers/documentController.js';
 
 // Realistic German Mortgage Document Rejection Simulation Reasons
 const REJECTION_REASONS = [
@@ -114,6 +115,13 @@ export const processDocumentVerificationAsync = async (docId, brokerageId) => {
           emitToBrokerage(brokerageId, 'lead:updated', leadObj);
         }
       }
+
+      // Invalidate all related Redis caches (documents, leads, client portal, and dashboard stats)
+      await invalidateDocumentCaches(
+        brokerageId,
+        doc.leadId?._id || doc.leadId,
+        doc.clientId?._id || doc.clientId
+      );
 
       console.log(`[Document Worker]: Async verification completed for doc ${doc._id} (${doc.title}) -> Result: ${doc.status.toUpperCase()}`);
     } catch (err) {

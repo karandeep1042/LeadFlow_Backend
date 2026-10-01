@@ -12,12 +12,11 @@ export const invalidateClientCaches = async (brokerageId, clientId = null) => {
   try {
     const promises = [
       cacheService.invalidatePattern(cacheService.generateKey(brokerageId, 'client', '*')),
+      cacheService.invalidatePattern(cacheService.generateKey(brokerageId, 'client:portal', '*')),
       cacheService.invalidatePattern(cacheService.generateKey(brokerageId, 'leads', '*')),
       cacheService.del(cacheService.generateKey(brokerageId, 'dash', 'stats')),
+      cacheService.del(cacheService.generateKey(brokerageId, 'team', 'advisors')),
     ];
-    if (clientId) {
-      promises.push(cacheService.del(cacheService.generateKey(brokerageId, 'client:portal', clientId)));
-    }
     await Promise.all(promises);
   } catch (err) {
     console.warn('[Cache] Error invalidating client caches:', err.message);
